@@ -637,9 +637,9 @@ class ExcelToMySQLApp(QMainWindow):
         self.log_message(f"Querying table `{table_name}` from {start_date_str} to {end_date_str}.")
 
         # --- SQL Query Construction ---
-        # Uses DATE() function on the import_time column to compare only the date part.
-        # This makes the comparison robust against varying time components in the import_time field.
-        sql_query = f"SELECT * FROM `{table_name}` WHERE DATE(`import_time`) >= '{start_date_str}' AND DATE(`import_time`) <= '{end_date_str}'"
+        # Uses DATE() function on the 'Date' column to compare only the date part.
+        # This makes the comparison robust against varying time components in the 'Date' field.
+        sql_query = f"SELECT * FROM `{table_name}` WHERE DATE(`Date`) >= '{start_date_str}' AND DATE(`Date`) <= '{end_date_str}'"
         self.log_message(f"Executing SQL: {sql_query}")
 
         conn = None # Initialize connection variable
