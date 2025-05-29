@@ -631,15 +631,15 @@ class ExcelToMySQLApp(QMainWindow):
 
         # --- Date Formatting for SQL Query ---
         start_date_str = start_date_q.toString("yyyy-MM-dd")
-        # To make the end date inclusive, set time to 23:59:59 for the SQL query
-        end_date_str_inclusive = end_date_q.toString("yyyy-MM-dd") + " 23:59:59"
+        # End date string, also in 'yyyy-MM-dd' format for DATE() comparison.
+        end_date_str = end_date_q.toString("yyyy-MM-dd") 
         
-        self.log_message(f"Querying table `{table_name}` from {start_date_str} to {end_date_q.toString('yyyy-MM-dd')}.")
+        self.log_message(f"Querying table `{table_name}` from {start_date_str} to {end_date_str}.")
 
         # --- SQL Query Construction ---
-        # Assumes the table has an 'import_time' column (TIMESTAMP or DATETIME) for date range filtering.
-        # This column name is hardcoded here; for more flexibility, it could be a user input.
-        sql_query = f"SELECT * FROM `{table_name}` WHERE `import_time` >= '{start_date_str}' AND `import_time` <= '{end_date_str_inclusive}'"
+        # Uses DATE() function on the import_time column to compare only the date part.
+        # This makes the comparison robust against varying time components in the import_time field.
+        sql_query = f"SELECT * FROM `{table_name}` WHERE DATE(`import_time`) >= '{start_date_str}' AND DATE(`import_time`) <= '{end_date_str}'"
         self.log_message(f"Executing SQL: {sql_query}")
 
         conn = None # Initialize connection variable
