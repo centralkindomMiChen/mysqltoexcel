@@ -671,16 +671,22 @@ class ExcelToMySQLApp(QMainWindow):
                 self.log_message(f"成功获取 {len(df)} 行数据。正在填充表格...") # "Successfully fetched {len(df)} rows. Populating table..."
                 
                 # --- Populate QTableView ---
-                # Create a QStandardItemModel to hold the data for the QTableView
-                model = QStandardItemModel(df.shape[0], df.shape[1]) # Rows, Columns
-                model.setHorizontalHeaderLabels(df.columns) # Set column headers
+                # Create an empty QStandardItemModel. Rows will be appended.
+                model = QStandardItemModel() 
+                model.setHorizontalHeaderLabels(list(df.columns)) # Set column headers correctly.
                 
                 # Iterate over the DataFrame rows and columns to populate the model
-                for row_idx, row in enumerate(df.values):
-                    for col_idx, value in enumerate(row):
-                        item = QStandardItem(str(value)) # Convert all values to strings for display
-                        item.setEditable(False)          # Make cells non-editable
-                        model.setItem(row_idx, col_idx, item)
+                # using df.iloc for precise cell access.
+                for i in range(len(df)):  # Iterate through row indices
+                    row_items = []
+                    for j in range(len(df.columns)):  # Iterate through column indices
+                        item_value = df.iloc[i, j]
+                        # Convert item_value to string, handle None or other types if necessary
+                        item_text = str(item_value) if item_value is not None else ""
+                        standard_item = QStandardItem(item_text)
+                        standard_item.setEditable(False) # Make cells non-editable
+                        row_items.append(standard_item)
+                    model.appendRow(row_items) # Append the list of items as a new row
                 
                 self.query_data_preview_table.setModel(model) # Set the model to the QTableView
                 self.query_data_preview_table.resizeColumnsToContents() # Adjust column widths to fit content
