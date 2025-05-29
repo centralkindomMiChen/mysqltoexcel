@@ -1,885 +1,968 @@
 import sys
 import pandas as pd
 import pymysql
-from sqlalchemy import create_engine, text
-import sqlalchemy.types
+from sqlalchemy import create_engine, types as sqlalchemy_types, text, inspect as sqlalchemy_inspect
 import hashlib
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
-                             QWidget, QPushButton, QLabel, QLineEdit, QTextEdit,
-                             QFileDialog, QGroupBox, QDateEdit, QTableView,
-                             QComboBox, QGridLayout)
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
+    QPushButton, QLabel, QLineEdit, QTextEdit, QFileDialog, QGroupBox,
+    QDateEdit, QTableView, QComboBox, QGridLayout
+)
 from PyQt5.QtCore import QTimer, Qt, QDateTime, QDate
 from PyQt5.QtGui import QFont, QColor, QPalette, QStandardItemModel, QStandardItem
+import traceback
+from sqlalchemy import exc as sqlalchemy_exc
 
 class ExcelToMySQLApp(QMainWindow):
+    """
+    Main application class for the Excel to MySQL Import and Query Tool.
+
+    Provides a PyQt5 GUI for users to:
+    1. Select an Excel file and import its contents into a MySQL database.
+       This includes features like data fingerprinting to avoid duplicate imports
+       and automatic creation of 'id' and 'import_time' columns.
+    2. Configure database connection parameters for both import and query operations.
+    3. Query data from a specified MySQL table based on a date range.
+    4. Preview queried data in a table view.
+    5. Export queried data to CSV or XLSX format.
+    Features a themed UI ("WinXP transparent宝石蓝色") and console logging.
+    """
     def __init__(self):
+        """
+        Initializes the application window, styles, UI components, timer,
+        and status variables.
+        """
         super().__init__()
-
         self.setWindowTitle("Excel导入MySQL工具 (宝石天蓝半透明 - UTF8兼容)")
-        self.setGeometry(300, 300, 820, 650)
-        self.set_lightblue_style()
+        self.setGeometry(100, 100, 820, 650) # x-pos, y-pos, width, height
 
-        self.central_widget = QWidget()
+        self.set_lightblue_style() # Apply custom QSS styling
+
+        # Setup central widget and main layout
+        self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
-        # self.main_layout will be reassigned in init_ui to the new QHBoxLayout
-        # self.main_layout = QVBoxLayout(self.central_widget) 
-        # self.main_layout.setSpacing(10)
+        # self.main_layout is the top-level QVBoxLayout for the central widget.
+        # It will contain the main horizontal layout (app_main_hbox) and the status bar.
+        self.main_layout = QVBoxLayout(self.central_widget)
 
-        self.init_ui() # Call to the refactored UI setup
+        self.init_ui() # Initialize all UI elements
 
+        # Timer for updating the status bar clock
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)
+        self.timer.start(1000)  # Update time every 1 second
 
-        self.imported_rows = 0
-        self.status = "等待操作"
-        self.update_status()
-        self.current_queried_df = None # DataFrame to store data from the last successful query
+        # Application state variables
+        self.imported_rows_count = 0  # Counter for successfully imported rows in the current session
+        self.current_status_text = "等待操作"  # User-facing status message
+        self.current_queried_df = None  # Stores the DataFrame from the latest database query
+
+        self.update_status_display() # Update UI elements showing status
+        self.log_message("应用程序启动成功 (Application started successfully).")
 
     def set_lightblue_style(self):
-        # Sets the application's visual style using QSS (Qt Style Sheets).
-        # This specific style aims for a "WinXP transparent宝石蓝色" (WinXP transparent sapphire blue) theme.
-        # It includes gradients, rounded corners, and specific color choices for various widgets.
-        # 半透明天蓝、宝石蓝渐变风格
-        self.setStyleSheet("""
+        """
+        Sets the application's visual theme using QSS (Qt Style Sheets).
+        This method defines the "WinXP transparent宝石蓝色" theme, styling various
+        widgets like QMainWindow, QGroupBox, QPushButton, QLineEdit, etc.,
+        using gradients, RGBA for transparency, and specific fonts.
+        """
+        self.setWindowOpacity(0.95) # Slight overall window transparency
+        self.setFont(QFont("微软雅黑", 10)) # Default application font
+
+        # Main QSS string
+        style_sheet = """
+            /* Overall window styling */
             QMainWindow {
-                /* Main window background: vertical gradient from light blue to a slightly darker blue, semi-transparent */
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(180,222,255,190),
-                                                stop:1 rgba(90,180,255,170));
-                border: 1px solid rgba(120, 180, 240, 180);
-                border-radius: 8px;
+                background-color: rgba(230, 240, 255, 0.85); /* Light blue, semi-transparent */
             }
+            /* GroupBox styling for distinct sections */
             QGroupBox {
-                background-color: rgba(210, 235, 255, 160); /* Light blue, semi-transparent background for group boxes */
-                border: 1px solid rgba(100,180,240,200); /* Slightly darker blue border */
-                border-radius: 6px;
-                margin-top: 12px; /* Margin to prevent title overlap or provide spacing */
-                padding: 12px; /* Inner padding */
-                padding-top: 25px; /* Extra top padding to make space for the title */
+                background-color: rgba(200, 220, 255, 0.7); /* Slightly darker blue for group boxes */
+                border: 1px solid rgba(100, 150, 255, 0.9);
+                border-radius: 8px;
+                margin-top: 10px; /* Space for title */
+                padding: 10px;
             }
             QGroupBox::title {
-                subcontrol-origin: margin; /* Position relative to the margin area */
-                subcontrol-position: top left; /* Place at the top left */
-                left: 12px; /* Offset from the left edge */
-                padding: 3px 6px;
-                background-color: rgba(120, 180, 240, 180); /* Themed blue background for the title */
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 10px;
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                                  stop:0 rgba(150, 200, 255, 1), stop:1 rgba(120, 180, 255, 1));
+                color: white;
                 border-radius: 4px;
-                color: #2B4C77; /* Dark blue text color for contrast */
                 font-weight: bold;
             }
+            /* Standard Button styling with gradient and states */
             QPushButton {
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(120,180,240,220),
-                                                stop:1 rgba(90,160,220,220));
-                border: 1px solid rgba(100,180,240,200);
+                                                  stop:0 rgba(100, 180, 255, 1), stop:1 rgba(50, 130, 235, 1));
+                color: white;
+                border: 1px solid rgba(30, 100, 200, 1); /* Darker border for definition */
                 border-radius: 5px;
-                padding: 7px 14px;
-                min-width: 110px;
-                color: #255A8A;
-                font-weight: bold;
+                padding: 8px 15px; /* Ample padding for clickable area */
+                font-size: 10pt;
             }
-            QPushButton:hover {
+            QPushButton:hover { /* Style for button when mouse hovers */
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(140,200,255,230),
-                                                stop:1 rgba(100,180,240,230));
-                border: 1.5px solid rgba(90,140,200,220);
-                color: #1366bb;
+                                                  stop:0 rgba(120, 200, 255, 1), stop:1 rgba(70, 150, 255, 1));
             }
-            QPushButton:pressed {
+            QPushButton:pressed { /* Style for button when clicked */
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(90,160,220,230),
-                                                stop:1 rgba(80,130,180,230));
-                border: 1px solid rgba(60,110,170,220);
+                                                  stop:0 rgba(50, 130, 235, 1), stop:1 rgba(30, 100, 200, 1));
             }
-            QPushButton:disabled {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(180,222,255,100),
-                                                stop:1 rgba(120,180,240,100));
-                border: 1px solid rgba(120,180,240,100);
-                color: rgba(25, 90, 160, 100);
+            QPushButton:disabled { /* Style for disabled button */
+                background-color: rgba(180, 180, 180, 0.7);
+                color: rgba(100, 100, 100, 0.8);
+                border-color: rgba(150, 150, 150, 0.7);
             }
+            /* LineEdit styling for text inputs */
             QLineEdit {
-                background-color: rgba(255, 255, 255, 210);
-                border: 1px solid rgba(120,180,240,180);
+                background-color: rgba(255, 255, 255, 0.9); /* Whiteish, semi-transparent */
+                border: 1px solid rgba(100, 150, 255, 0.9);
                 border-radius: 4px;
-                padding: 6px;
-                color: #1865A0;
+                padding: 6px; /* Comfortable text padding */
+                font-size: 10pt;
             }
-            QLineEdit[readOnly="true"] {
-                background-color: rgba(200, 230, 255, 150);
-                color: #2B4C77;
-                border: 1px solid rgba(120,180,240,140);
+            QLineEdit:read-only { /* Style for read-only LineEdits */
+                background-color: rgba(230, 230, 230, 0.8);
+                color: #555; /* Greyed out text */
+            }
+            /* Label styling */
+            QLabel {
+                color: #333; /* Dark grey text for good readability */
+                padding: 2px;
+                font-size: 10pt;
+            }
+            /* Specific styling for the console output QTextEdit */
+            QTextEdit#ConsoleOutput {
+                background-color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(100, 150, 255, 0.9); /* Thematic border */
                 border-radius: 4px;
-                padding: 6px;
+                padding: 5px; /* Padding for text content */
+                color: #333; /* Text color */
+                font-family: "Consolas", "Courier New", monospace; /* Monospaced font for console */
             }
-            QDateEdit, QComboBox {
-                background-color: rgba(255, 255, 255, 210); /* Matches QLineEdit */
-                border: 1px solid rgba(120,180,240,180); /* Matches QLineEdit */
-                border-radius: 4px; /* Matches QLineEdit */
-                padding: 6px; /* Harmonized with QLineEdit */
-                color: #1865A0; /* Matches QLineEdit */
-                selection-background-color: rgba(120, 180, 240, 180); /* Background color for selected text inside QDateEdit/QComboBox */
-                selection-color: #FFFFFF; /* Text color for selected text */
+            /* QDateEdit styling */
+            QDateEdit {
+                background-color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(100, 150, 255, 0.9);
+                border-radius: 4px;
+                padding: 5px; 
+                font-size: 10pt;
             }
-            /* Styling for the dropdown button of QDateEdit */
-            QDateEdit::drop-down {
-                subcontrol-origin: padding; /* Position relative to the padding edge */
-                subcontrol-position: top right; /* Place at the top right */
+            QDateEdit::drop-down { /* Styling for the dropdown button of QDateEdit */
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
                 width: 20px; /* Width of the dropdown button */
-                border-left-width: 1px; /* Border separating button from the text field part */
-                border-left-color: rgba(120,180,240,180);
+                border-left-width: 1px;
+                border-left-color: rgba(100, 150, 255, 0.9);
                 border-left-style: solid;
-                border-top-right-radius: 3px; /* Rounded corners for the button part */
+                border-top-right-radius: 3px; /* Rounded corners for the button */
                 border-bottom-right-radius: 3px;
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, /* Gradient background for the button */
-                                                stop:0 rgba(180,222,255,190),
-                                                stop:1 rgba(120,180,240,190));
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                                  stop:0 rgba(150, 200, 255, 1), stop:1 rgba(120, 180, 255, 1));
             }
-            /* Styling for the dropdown arrow of QDateEdit */
-            QDateEdit::down-arrow {
-                /* image: url(down_arrow.png); -- Removed to allow default Qt arrow or custom QSS arrow */
-                width: 12px; 
-                height: 12px;
-                /* Example for a simple QSS-drawn triangle arrow:
-                   border-left: 4px solid transparent;
-                   border-right: 4px solid transparent;
-                   border-top: 4px solid #1865A0; 
-                   margin: auto; 
-                */
+            QDateEdit::down-arrow { /* Arrow icon for QDateEdit dropdown */
+                image: url(down_arrow.png); /* Placeholder: requires an actual image file or remove for default arrow */
             }
-            /* Styling for the dropdown button of QComboBox, similar to QDateEdit */
-            QComboBox::drop-down {
+            /* QComboBox styling */
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(100, 150, 255, 0.9);
+                border-radius: 4px;
+                padding: 5px; /* Padding for text */
+                font-size: 10pt;
+                min-width: 6em; /* Minimum width to ensure readability */
+            }
+            QComboBox::drop-down { /* Styling for the dropdown button of QComboBox */
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
                 width: 20px;
                 border-left-width: 1px;
-                border-left-color: rgba(120,180,240,180);
+                border-left-color: rgba(100, 150, 255, 0.9);
                 border-left-style: solid;
                 border-top-right-radius: 3px;
                 border-bottom-right-radius: 3px;
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(180,222,255,190),
-                                                stop:1 rgba(120,180,240,190));
+                                                  stop:0 rgba(150, 200, 255, 1), stop:1 rgba(120, 180, 255, 1));
             }
-            /* Styling for the dropdown arrow of QComboBox */
-            QComboBox::down-arrow {
-                /* image: url(down_arrow.png); -- Removed for default arrow */
-                width: 12px; 
-                height: 12px;
+            QComboBox::down-arrow { /* Arrow icon for QComboBox dropdown */
+                 image: url(down_arrow.png); /* Placeholder: requires an actual image file or remove for default arrow */
             }
-            /* Styling for the dropdown list (popup) of QComboBox */
-            QComboBox QAbstractItemView { 
-                border: 1px solid rgba(120,180,240,180); /* Border for the popup list */
-                background-color: rgba(230, 245, 255, 250); /* Background of the list, slightly more opaque */
-                color: #1865A0; /* Text color for items */
-                selection-background-color: rgba(120, 180, 240, 200); /* Background for selected item */
-                selection-color: #FFFFFF; /* Text color for selected item */
-                padding: 3px; /* Padding for items within the list */
-                outline: 0px; /* Removes focus outline from items if not desired */
-            }
-            /* General styling for QTableView */
+            /* QTableView styling for data preview */
             QTableView {
-                background-color: rgba(255, 255, 255, 210); /* Matches QLineEdit background */
-                border: 1px solid rgba(120,180,240,180); /* Matches QLineEdit border */
-                border-radius: 4px; /* Matches QLineEdit border-radius */
-                gridline-color: rgba(180,222,255,190); /* Grid lines with a theme color */
-                color: #1865A0; /* Default text color for items */
-                alternate-background-color: rgba(230, 245, 255, 180); /* Alternating row color for readability */
+                background-color: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(100, 150, 255, 0.9);
+                border-radius: 4px;
+                gridline-color: rgba(150, 200, 255, 0.8); /* Thematic grid lines */
+                font-size: 9pt; /* Slightly smaller font for table data */
             }
-            /* Styling for individual items/cells in QTableView */
-            QTableView::item {
-                padding: 5px;
-                border-bottom: 1px solid rgba(180,222,255,170); /* Subtle separator line between rows */
-            }
-            /* Styling for selected items in QTableView */
-            QTableView::item:selected {
-                background-color: rgba(120, 180, 240, 180); /* Themed blue background for selected items */
-                color: #FFFFFF; /* White text for selected items for contrast */
-            }
-            /* Styling for the cell that currently has focus in QTableView */
-             QTableView::item:focus { 
-                outline: 1px solid rgba(90,160,220,220); /* Outline to indicate focus */
-                outline-offset: -1px; /* Draw outline slightly inside the cell boundaries */
-            }
-            /* Styling for the header sections of QTableView (both horizontal and vertical headers) */
+            /* QHeaderView styling for QTableView headers */
             QHeaderView::section {
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                                stop:0 rgba(180,222,255,190),
-                                                stop:1 rgba(120,180,240,190));
-                border: 1px solid rgba(120,180,240,180);
-                padding: 5px;
-                color: #2B4C77;
+                                                  stop:0 rgba(150, 200, 255, 1), stop:1 rgba(120, 180, 255, 1));
+                color: white; /* Header text color */
+                padding: 4px; /* Header padding */
+                border: 1px solid rgba(100, 150, 255, 0.9); /* Border for header sections */
                 font-weight: bold;
             }
-            QLabel {
-                color: #2B4C77;
-                background-color: transparent;
-                padding: 3px;
-            }
-            QTextEdit#ConsoleOutput {
-                background-color: rgba(190, 230, 255, 140);
-                border: 1px solid rgba(100,180,240,150);
-                color: #255A8A;
-                font-family: 'Consolas', 'Courier New', monospace;
-                border-radius: 4px;
-            }
-        """)
-        self.setWindowOpacity(0.95)
-        font = QFont("微软雅黑", 10)
-        self.setFont(font)
+        """
+        self.setStyleSheet(style_sheet)
 
     def init_ui(self):
         """
-        Initializes the main UI layout.
-        The UI is structured into a two-column layout:
-        - Left Panel: Contains all control and input group boxes.
-        - Right Panel: Displays the data preview table and console output.
-        An outer QVBoxLayout ensures the status bar remains at the bottom of the central widget.
+        Initializes and arranges the main UI components.
+
+        This method sets up the primary two-column layout:
+        - Left Panel: Contains controls for Excel import and database query/export settings.
+        - Right Panel: Contains the data preview table and the console output.
+        The status bar is placed at the bottom of the window.
         """
-        
-        # This QHBoxLayout forms the main two-column structure (left and right panels).
-        app_main_hbox_layout = QHBoxLayout() 
-        app_main_hbox_layout.setSpacing(10)
+        # Overall application layout (vertical: app_main_hbox on top, status_bar_label at bottom)
+        # self.main_layout is already a QVBoxLayout set in __init__
 
-        # --- Left Panel: Controls and Inputs ---
-        # This widget and its QVBoxLayout will hold all user input group boxes.
+        app_main_hbox = QHBoxLayout() # Main horizontal layout for the two panels
+
+        # --- Left Panel: Controls and Info ---
         left_panel_widget = QWidget()
-        left_panel_vbox = QVBoxLayout(left_panel_widget) # Layout for the left panel
-        left_panel_vbox.setSpacing(10)
-        left_panel_vbox.setContentsMargins(0,0,0,0) 
-
-        # Create and add 'Control Panel' group box to the left panel.
-        self.control_group = self.create_control_group()
+        left_panel_vbox = QVBoxLayout(left_panel_widget)
+        
+        # Create and add functional groups to the left panel
+        self.control_group = self.create_control_group() # Excel selection and import button
         left_panel_vbox.addWidget(self.control_group)
 
-        # Create and add 'Database Info' group box to the left panel.
-        self.db_info_group = self.create_db_info_group()
+        self.db_info_group = self.create_db_info_group() # DB credentials for import
         left_panel_vbox.addWidget(self.db_info_group)
 
-        # Create and add 'Table Info' group box to the left panel.
-        self.table_info_group = self.create_table_info_group()
+        self.table_info_group = self.create_table_info_group() # Table name and import status
         left_panel_vbox.addWidget(self.table_info_group)
         
-        # Create and add 'Database Query and Export' settings group box to the left panel.
-        self.query_export_settings_group = self.create_query_export_group() 
+        self.query_export_settings_group = self.create_query_export_settings_group() # Query/export controls
         left_panel_vbox.addWidget(self.query_export_settings_group)
-        
-        left_panel_vbox.addStretch(1) # Pushes all group boxes in the left panel upwards.
 
-        # Add the left panel widget to the main horizontal layout.
-        # The stretch factor of 1 for the left panel vs 3 for the right makes the right panel wider.
-        app_main_hbox_layout.addWidget(left_panel_widget, 1) 
+        left_panel_vbox.addStretch(1) # Pushes all group boxes to the top of the left panel
 
-        # --- Right Panel: Data Display and Console ---
-        # This widget and its QVBoxLayout will hold the data preview table and console output.
+        # --- Right Panel: Data Preview and Console ---
         right_panel_widget = QWidget()
-        right_panel_vbox = QVBoxLayout(right_panel_widget) # Layout for the right panel
-        right_panel_vbox.setSpacing(10)
-        right_panel_vbox.setContentsMargins(0,0,0,0)
+        right_panel_vbox = QVBoxLayout(right_panel_widget)
 
-        # Add the Query Data Preview Table to the right panel.
-        # self.query_data_preview_table is instantiated within create_query_export_group().
-        # Stretch factor of 3 for the table view makes it take more vertical space than the console.
-        right_panel_vbox.addWidget(self.query_data_preview_table, 3) 
+        # Group for Data Query Preview Table
+        query_preview_group = QGroupBox("数据查询结果预览 (Query Results Preview)") 
+        query_preview_layout = QVBoxLayout(query_preview_group)
+        self.query_data_preview_table = QTableView() # Table to display queried data
+        query_preview_layout.addWidget(self.query_data_preview_table)
+        # Give table view more stretch factor compared to console
+        right_panel_vbox.addWidget(query_preview_group, 2) 
 
-        # Add the Console Output (QTextEdit) wrapped in a QGroupBox to the right panel.
-        self.console_output = self.create_console_output_widget() 
-        console_group_for_right_panel = QGroupBox("控制台输出") # Title in Chinese
-        console_layout_for_right_panel = QVBoxLayout()
-        console_layout_for_right_panel.addWidget(self.console_output)
-        console_group_for_right_panel.setLayout(console_layout_for_right_panel)
-        # Stretch factor of 2 for the console group.
-        right_panel_vbox.addWidget(console_group_for_right_panel, 2) 
+        # Group for Console Output
+        console_group_box = QGroupBox("控制台输出 (Console Output)")
+        self.console_widget = self.create_console_output_widget() # QTextEdit for logs
+        console_layout = QVBoxLayout(console_group_box)
+        console_layout.addWidget(self.console_widget)
+        right_panel_vbox.addWidget(console_group_box, 1) # Console gets less stretch factor
+
+        # Add left and right panels to the main horizontal layout
+        app_main_hbox.addWidget(left_panel_widget, 1)  # Left panel stretch factor
+        app_main_hbox.addWidget(right_panel_widget, 2) # Right panel stretch factor (wider)
+
+        # Add the two-column layout (app_main_hbox) to the main vertical layout of the central widget
+        self.main_layout.addLayout(app_main_hbox)
         
-        # Add the right panel widget to the main horizontal layout.
-        # Stretch factor of 3 makes the right panel wider than the left panel (which has a factor of 1).
-        app_main_hbox_layout.addWidget(right_panel_widget, 3)
+        # Status bar at the bottom
+        self.status_bar_label = QLabel("状态栏初始化... (Status Bar Initialized...)") 
+        self.main_layout.addWidget(self.status_bar_label)
 
-        # --- Overall Layout and Status Bar ---
-        # The outer_vbox_layout ensures that the status_bar is positioned correctly
-        # at the bottom of the central widget, underneath the two-column (app_main_hbox_layout) structure.
-        outer_vbox_layout = QVBoxLayout(self.central_widget) # Set this as the layout for the central widget
-        outer_vbox_layout.addLayout(app_main_hbox_layout) # Add the two-column layout first
+        self.update_time() # Initialize time display
+
+    def create_query_export_settings_group(self):
+        """
+        Creates the QGroupBox for "数据库查询与导出" (Database Query & Export) settings.
         
-        self.status_bar = QLabel() 
-        self.status_bar.setAlignment(Qt.AlignCenter)
-        self.status_bar.setStyleSheet(
-            "padding: 4px; color: #255A8A; "
-            "background-color: rgba(180,222,255,190); "
-            "border-radius: 3px; font-weight:bold;"
-        )
-        outer_vbox_layout.addWidget(self.status_bar) # Add status bar at the bottom
-        self.main_layout = outer_vbox_layout # The outermost layout is now the main_layout for central widget.
-        self.update_time()
+        This group contains input fields for database connection (host, user, password, DB name),
+        table name, date range for querying, and controls for initiating the query,
+        selecting export path/format, and downloading data.
+        
+        Returns:
+            QGroupBox: The configured group box with all UI elements.
+        """
+        group_box = QGroupBox("数据库查询与导出 (Database Query & Export)")
+        layout = QGridLayout() # Using QGridLayout for a structured label-field layout
+
+        # Row 0: DB Host input
+        layout.addWidget(QLabel("主机 (Host):"), 0, 0)
+        self.query_db_host_edit = QLineEdit("localhost") # Default to localhost
+        layout.addWidget(self.query_db_host_edit, 0, 1, 1, 2) # Spans 1 row, 2 columns
+
+        # Row 1: DB User input
+        layout.addWidget(QLabel("用户 (User):"), 1, 0)
+        self.query_db_user_edit = QLineEdit("root") # Default to root
+        layout.addWidget(self.query_db_user_edit, 1, 1, 1, 2)
+
+        # Row 2: DB Password input
+        layout.addWidget(QLabel("密码 (Password):"), 2, 0)
+        self.query_db_password_edit = QLineEdit()
+        self.query_db_password_edit.setEchoMode(QLineEdit.Password) # Mask password input
+        layout.addWidget(self.query_db_password_edit, 2, 1, 1, 2)
+
+        # Row 3: Database Name input
+        layout.addWidget(QLabel("数据库 (Database):"), 3, 0)
+        self.query_db_name_edit = QLineEdit("michentestdb2") # Default DB name
+        layout.addWidget(self.query_db_name_edit, 3, 1, 1, 2)
+        
+        # Row 4: Table Name input
+        layout.addWidget(QLabel("表名 (Table):"), 4, 0)
+        self.query_table_name_edit = QLineEdit("report_data") # Default table name
+        layout.addWidget(self.query_table_name_edit, 4, 1, 1, 2)
+
+        # Row 5: Start Date input
+        layout.addWidget(QLabel("开始日期 (Start Date):"), 5, 0)
+        self.query_start_date_edit = QDateEdit(QDate.currentDate()) # Default to today
+        self.query_start_date_edit.setCalendarPopup(True) # Use a pop-up calendar
+        self.query_start_date_edit.setDisplayFormat("yyyy-MM-dd") # Standard date format
+        layout.addWidget(self.query_start_date_edit, 5, 1, 1, 2)
+
+        # Row 6: End Date input
+        layout.addWidget(QLabel("结束日期 (End Date):"), 6, 0)
+        self.query_end_date_edit = QDateEdit(QDate.currentDate()) # Default to today
+        self.query_end_date_edit.setCalendarPopup(True)
+        self.query_end_date_edit.setDisplayFormat("yyyy-MM-dd")
+        layout.addWidget(self.query_end_date_edit, 6, 1, 1, 2)
+
+        # Row 7: Query Button
+        self.btn_query_data = QPushButton("查询数据 (Query Data)")
+        self.btn_query_data.clicked.connect(self.query_data_from_db)
+        layout.addWidget(self.btn_query_data, 7, 0, 1, 3) # Span all 3 columns for emphasis
+
+        # Row 8: Export File Path input and Browse button
+        layout.addWidget(QLabel("导出路径 (Export Path):"), 8, 0)
+        self.query_export_path_edit = QLineEdit()
+        self.query_export_path_edit.setPlaceholderText("选择或输入导出文件路径... (Select or input export file path...)")
+        layout.addWidget(self.query_export_path_edit, 8, 1, 1, 1) # Path edit takes 1 column
+        self.btn_browse_export_path = QPushButton("浏览... (Browse...)")
+        self.btn_browse_export_path.clicked.connect(self.select_export_file_path)
+        layout.addWidget(self.btn_browse_export_path, 8, 2, 1, 1) # Browse button takes 1 column
+
+        # Row 9: Export Format selection
+        layout.addWidget(QLabel("导出格式 (Export Format):"), 9, 0)
+        self.query_export_format_combo = QComboBox()
+        self.query_export_format_combo.addItems(["CSV", "XLSX"]) # Supported formats
+        layout.addWidget(self.query_export_format_combo, 9, 1, 1, 2)
+
+        # Row 10: Download Button
+        self.btn_download_data = QPushButton("下载数据 (Download Data)")
+        self.btn_download_data.clicked.connect(self.download_queried_data)
+        self.btn_download_data.setEnabled(False) # Initially disabled until data is queried
+        layout.addWidget(self.btn_download_data, 10, 0, 1, 3) # Span all 3 columns
+        
+        group_box.setLayout(layout)
+        return group_box
 
 
     def create_control_group(self):
-        """Creates and returns the 'Control Panel' QGroupBox."""
-        group = QGroupBox("控制面板") # Title in Chinese
-        layout = QHBoxLayout()
-        layout.setSpacing(10)
+        """
+        Creates the QGroupBox for "控制面板" (Control Panel).
+        This group contains widgets for selecting an Excel file and initiating the import.
+        """
+        group_box = QGroupBox("控制面板 (Control Panel)")
+        layout = QVBoxLayout() # Simple vertical layout
 
-        self.btn_select = QPushButton("选择Excel文件")
+        # Button to trigger file selection dialog
+        self.btn_select = QPushButton("选择Excel文件 (Select Excel File)")
         self.btn_select.clicked.connect(self.select_excel_file)
         layout.addWidget(self.btn_select)
 
-        self.file_path = QLineEdit()
-        self.file_path.setPlaceholderText("未选择文件")
-        self.file_path.setReadOnly(True)
-        layout.addWidget(self.file_path, 1)
+        # Read-only LineEdit to display selected file path
+        self.file_path_edit = QLineEdit() 
+        self.file_path_edit.setPlaceholderText("未选择文件 (No file selected)")
+        self.file_path_edit.setReadOnly(True)
+        layout.addWidget(self.file_path_edit)
 
-        self.btn_import = QPushButton("导入数据库")
+        # Button to start the import process
+        self.btn_import = QPushButton("导入数据库 (Import to Database)")
         self.btn_import.clicked.connect(self.import_to_mysql)
-        self.btn_import.setEnabled(False)
+        self.btn_import.setEnabled(False) # Initially disabled until a file is selected
         layout.addWidget(self.btn_import)
 
-        group.setLayout(layout)
-        # self.main_layout.addWidget(group) # Removed: init_ui will add it
-        return group
+        group_box.setLayout(layout)
+        return group_box
 
     def create_db_info_group(self):
-        """Creates and returns the 'Database Info' QGroupBox."""
-        group = QGroupBox("数据库信息") # Title in Chinese
-        layout = QHBoxLayout()
-        layout.setSpacing(8)
+        """
+        Creates the QGroupBox for "数据库信息" (Database Information).
+        This group contains input fields for database connection details (name, user, password)
+        primarily used for the Excel import functionality.
+        """
+        group_box = QGroupBox("数据库信息 (Database Information - For Import)")
+        layout = QVBoxLayout()
 
-        lbl_db_name = QLabel("数据库名称:")
-        lbl_db_name.setMinimumWidth(80)
-        layout.addWidget(lbl_db_name)
-        self.db_name = QLineEdit("michentestdb2")
-        layout.addWidget(self.db_name, 1)
+        # Database Name input
+        db_name_layout = QHBoxLayout()
+        db_name_label = QLabel("数据库名称 (DB Name):")
+        self.db_name_edit = QLineEdit("michentestdb2") # Default DB name for import
+        db_name_layout.addWidget(db_name_label)
+        db_name_layout.addWidget(self.db_name_edit)
+        layout.addLayout(db_name_layout)
 
-        lbl_db_user = QLabel("用户名:")
-        lbl_db_user.setMinimumWidth(60)
-        layout.addWidget(lbl_db_user)
-        self.db_user = QLineEdit("root")
-        layout.addWidget(self.db_user, 1)
+        # Database User input
+        db_user_layout = QHBoxLayout()
+        db_user_label = QLabel("用户名 (User):")
+        self.db_user_edit = QLineEdit("root") # Default user for import
+        db_user_layout.addWidget(db_user_label)
+        db_user_layout.addWidget(self.db_user_edit)
+        layout.addLayout(db_user_layout)
 
-        lbl_db_password = QLabel("密码:")
-        lbl_db_password.setMinimumWidth(50)
-        layout.addWidget(lbl_db_password)
-        self.db_password = QLineEdit("123")
-        self.db_password.setEchoMode(QLineEdit.Password)
-        layout.addWidget(self.db_password, 1)
-
-        group.setLayout(layout)
-        # self.main_layout.addWidget(group) # Removed: init_ui will add it
-        return group
+        # Database Password input
+        db_password_layout = QHBoxLayout()
+        db_password_label = QLabel("密码 (Password):")
+        self.db_password_edit = QLineEdit("123") # Default password for import
+        self.db_password_edit.setEchoMode(QLineEdit.Password) # Mask password
+        db_password_layout.addWidget(db_password_label)
+        db_password_layout.addWidget(self.db_password_edit)
+        layout.addLayout(db_password_layout)
+        
+        group_box.setLayout(layout)
+        return group_box
 
     def create_table_info_group(self):
-        """Creates and returns the 'Table Info' QGroupBox."""
-        group = QGroupBox("表信息") # Title in Chinese
-        layout = QHBoxLayout()
-        layout.setSpacing(8)
+        """
+        Creates the QGroupBox for "表信息" (Table Information).
+        This group displays information related to the import process, such as
+        the target table name, number of rows imported, and current operation status.
+        """
+        group_box = QGroupBox("表信息 (Table Information - For Import)")
+        layout = QVBoxLayout()
 
-        lbl_table_name = QLabel("表名称:")
-        lbl_table_name.setMinimumWidth(65)
-        layout.addWidget(lbl_table_name)
-        self.table_name = QLineEdit("report_data")
-        layout.addWidget(self.table_name, 1)
+        # Target Table Name input (for import)
+        table_name_layout = QHBoxLayout()
+        table_name_label = QLabel("表名称 (Table Name):")
+        self.table_name_edit = QLineEdit("report_data") # Default table name for import
+        table_name_layout.addWidget(table_name_label)
+        table_name_layout.addWidget(self.table_name_edit)
+        layout.addLayout(table_name_layout)
 
-        lbl_rows_imported = QLabel("导入行数:")
-        lbl_rows_imported.setMinimumWidth(70)
-        layout.addWidget(lbl_rows_imported)
-        self.rows_imported = QLineEdit("0")
-        self.rows_imported.setReadOnly(True)
-        self.rows_imported.setMaximumWidth(100)
-        layout.addWidget(self.rows_imported, 0)
+        # Display for Number of Rows Imported (read-only)
+        rows_imported_layout = QHBoxLayout()
+        rows_imported_label = QLabel("导入行数 (Rows Imported):")
+        self.rows_imported_edit = QLineEdit("0") 
+        self.rows_imported_edit.setReadOnly(True)
+        rows_imported_layout.addWidget(rows_imported_label)
+        rows_imported_layout.addWidget(self.rows_imported_edit)
+        layout.addLayout(rows_imported_layout)
+        
+        # Display for Current Operation Status (read-only)
+        operation_status_layout = QHBoxLayout()
+        operation_status_label = QLabel("状态 (Status):")
+        self.operation_status_edit = QLineEdit("等待操作 (Waiting for operation)") 
+        self.operation_status_edit.setReadOnly(True)
+        operation_status_layout.addWidget(operation_status_label)
+        operation_status_layout.addWidget(self.operation_status_edit)
+        layout.addLayout(operation_status_layout)
 
-        lbl_op_status = QLabel("状态:")
-        lbl_op_status.setMinimumWidth(45)
-        layout.addWidget(lbl_op_status)
-        self.operation_status = QLineEdit("等待操作")
-        self.operation_status.setReadOnly(True)
-        layout.addWidget(self.operation_status, 1)
-
-        group.setLayout(layout)
-        # self.main_layout.addWidget(group) # Removed: init_ui will add it
-        return group
+        group_box.setLayout(layout)
+        return group_box
 
     def create_console_output_widget(self):
-        """Creates and returns the QTextEdit widget for console output."""
-        if not hasattr(self, 'console_output') or self.console_output is None:
-             # Ensure console_output is created if not already (e.g. if create_console_group was removed entirely)
-            self.console_output = QTextEdit()
-            self.console_output.setObjectName("ConsoleOutput")
-            self.console_output.setReadOnly(True)
+        """
+        Creates the QTextEdit widget used for console logging.
+        It's set to read-only and given an object name for specific QSS styling.
+        """
+        self.console_output = QTextEdit()
+        self.console_output.setObjectName("ConsoleOutput") # For QSS styling
+        self.console_output.setReadOnly(True) # User cannot type into console
         return self.console_output
 
-
-    def create_query_export_group(self):
+    def select_excel_file(self):
         """
-        Creates the 'Database Query and Export' QGroupBox (settings part only).
-        The QTableView for data preview is handled separately in init_ui.
+        Opens a QFileDialog to allow the user to select an Excel file (*.xlsx, *.xls).
+        Updates the file path display and enables the import button if a file is selected.
         """
-        group = QGroupBox("数据库查询与导出") # Group box title in Chinese as per UI
-        
-        # Main layout for this groupbox (vertical) - for settings only now
-        query_export_settings_layout = QVBoxLayout()
-        query_export_settings_layout.setSpacing(10) # Spacing between child layouts/widgets
-
-        # --- Database Connection Info ---
-        # Layout for database connection parameters
-        db_info_layout = QGridLayout() 
-        db_info_layout.setSpacing(8)
-
-        # Input fields for database connection
-        self.query_db_host_edit = QLineEdit('localhost') # Default host
-        self.query_db_user_edit = QLineEdit() 
-        self.query_db_password_edit = QLineEdit()
-        self.query_db_password_edit.setEchoMode(QLineEdit.Password) # Mask password input
-        self.query_db_name_edit = QLineEdit() 
-        self.query_table_name_edit = QLineEdit() 
-        
-        # Adding labels and input fields to the grid layout
-        db_info_layout.addWidget(QLabel("主机:"), 0, 0)
-        db_info_layout.addWidget(self.query_db_host_edit, 0, 1)
-        db_info_layout.addWidget(QLabel("用户:"), 0, 2)
-        db_info_layout.addWidget(self.query_db_user_edit, 0, 3)
-        
-        db_info_layout.addWidget(QLabel("密码:"), 1, 0)
-        db_info_layout.addWidget(self.query_db_password_edit, 1, 1)
-        db_info_layout.addWidget(QLabel("数据库名:"), 1, 2)
-        db_info_layout.addWidget(self.query_db_name_edit, 1, 3)
-
-        db_info_layout.addWidget(QLabel("表名:"), 2, 0)
-        db_info_layout.addWidget(self.query_table_name_edit, 2, 1, 1, 3) # Table name input spans 3 columns
-
-        query_export_settings_layout.addLayout(db_info_layout) # Add DB info grid to the settings layout
-
-        # --- Date Selection & Query Button ---
-        # Layout for date range selection and the query button
-        date_query_layout = QHBoxLayout()
-        date_query_layout.setSpacing(8)
-
-        date_query_layout.addWidget(QLabel("开始日期:"))
-        self.query_start_date_edit = QDateEdit(QDate.currentDate()) # Default to current date
-        self.query_start_date_edit.setCalendarPopup(True) # Use a popup calendar
-        date_query_layout.addWidget(self.query_start_date_edit)
-        
-        date_query_layout.addWidget(QLabel("结束日期:"))
-        self.query_end_date_edit = QDateEdit(QDate.currentDate()) # Default to current date
-        self.query_end_date_edit.setCalendarPopup(True)
-        date_query_layout.addWidget(self.query_end_date_edit)
-        
-        date_query_layout.addStretch(1) # Pushes the query button to the right
-        
-        self.btn_query_data = QPushButton("查询数据") 
-        self.btn_query_data.clicked.connect(self.query_data_from_db) # Connect button to query method
-        date_query_layout.addWidget(self.btn_query_data)
-        query_export_settings_layout.addLayout(date_query_layout) # Add date/query layout to settings
-
-        # --- Data Display Table (creation only, not added to this group's layout) ---
-        if not hasattr(self, 'query_data_preview_table') or self.query_data_preview_table is None:
-            self.query_data_preview_table = QTableView() 
-            # Basic properties like setAlternatingRowColors could be set here if desired,
-            # but it's primarily for display in the right panel.
-
-        # --- Export Section ---
-        # Layout for export path selection
-        export_controls_layout = QHBoxLayout()
-        export_controls_layout.setSpacing(8)
-
-        export_controls_layout.addWidget(QLabel("导出路径:"))
-        self.query_export_path_edit = QLineEdit() 
-        self.query_export_path_edit.setPlaceholderText("选择或输入导出文件路径...")
-        export_controls_layout.addWidget(self.query_export_path_edit, 1) # Path edit takes available space
-        
-        self.btn_browse_export_path = QPushButton("浏览...") 
-        self.btn_browse_export_path.clicked.connect(self.select_export_file_path) # Connect to path selection dialog
-        export_controls_layout.addWidget(self.btn_browse_export_path)
-        query_export_settings_layout.addLayout(export_controls_layout)
-
-        # Layout for export format selection and download button
-        export_options_layout = QHBoxLayout()
-        export_options_layout.setSpacing(8)
-        export_options_layout.addWidget(QLabel("导出格式:"))
-        self.query_export_format_combo = QComboBox() 
-        self.query_export_format_combo.addItems(["CSV", "XLSX"]) # Available export formats
-        export_options_layout.addWidget(self.query_export_format_combo)
-        
-        export_options_layout.addStretch(1) # Pushes download button to the right
-
-        self.btn_download_data = QPushButton("下载数据") 
-        self.btn_download_data.setEnabled(False) # Initially disabled, enabled after successful query
-        self.btn_download_data.clicked.connect(self.download_queried_data) # Connect to download method
-        export_options_layout.addWidget(self.btn_download_data)
-        query_export_settings_layout.addLayout(export_options_layout)
-        
-        group.setLayout(query_export_settings_layout) # Set the settings layout for the group box
-        return group
-
-    def select_export_file_path(self):
-        """
-        Opens a file dialog to allow the user to select a path and filename for exporting data.
-        The suggested filename and file type filter are based on the currently selected
-        export format in the QComboBox.
-        """
-        self.log_message("Opening dialog to select export file path...")
-        current_format = self.query_export_format_combo.currentText().lower()
-        default_filename = f"exported_data.{current_format}" # Suggest e.g., "exported_data.csv"
-        
-        # Define file filters based on the selected format for the dialog
-        if current_format == "csv":
-            filter_str = "CSV Files (*.csv);;All Files (*)"
-        elif current_format == "xlsx":
-            filter_str = "Excel Files (*.xlsx);;All Files (*)"
-        else:
-            filter_str = "All Files (*)" # Fallback, should not happen with current ComboBox items
-
         options = QFileDialog.Options()
-        # options |= QFileDialog.DontUseNativeDialog # Useful for testing or if native dialogs cause issues
-        
-        # Open the "Save File" dialog
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择导出文件路径", # Dialog title
-            default_filename,  # Suggested filename
-            filter_str,        # File type filters
-            options=options
-        )
-
+        # options |= QFileDialog.DontUseNativeDialog # Uncomment to use Qt's dialog over native
+        file_path, _ = QFileDialog.getOpenFileName(self, 
+                                                   "选择Excel文件 (Select Excel File)", 
+                                                   "", # Default directory
+                                                   "Excel Files (*.xlsx *.xls);;All Files (*)", 
+                                                   options=options)
         if file_path:
-            # Automatically append the correct extension if the user didn't type it
-            # or if they selected a filter but typed a name without an extension.
-            if current_format == "csv" and not file_path.lower().endswith(".csv"):
-                file_path += ".csv"
-            elif current_format == "xlsx" and not file_path.lower().endswith(".xlsx"):
-                file_path += ".xlsx"
-                
-            self.query_export_path_edit.setText(file_path) # Update the QLineEdit with the chosen path
-            self.log_message(f"Export file path selected: {file_path}")
+            self.file_path_edit.setText(file_path)
+            self.btn_import.setEnabled(True) # Enable import button
+            self.log_message(f"已选择文件 (File selected): {file_path}")
+            self.current_status_text = "文件已选择，待导入 (File selected, ready to import)"
+            self.update_status_display()
         else:
-            self.log_message("Export file path selection cancelled.")
+            self.log_message("未选择文件 (No file selected).")
+            self.btn_import.setEnabled(False) # Keep import button disabled
+            self.current_status_text = "操作取消 (Operation cancelled)"
+            self.update_status_display()
 
-    def download_queried_data(self):
+    def generate_data_fingerprint(self, dataframe):
         """
-        Saves the data currently stored in `self.current_queried_df` to a file.
-        The file path and format (CSV/XLSX) are taken from the UI elements.
-        """
-        self.log_message("Initiating data download...")
+        Generates an MD5 fingerprint for a given DataFrame.
+        The fingerprint is based on a string representation of the DataFrame's head (first 5 rows)
+        and its column names. This helps in identifying if an identical dataset (at least the beginning)
+        has been imported before.
 
-        # Check if there's any data to export
-        if self.current_queried_df is None or self.current_queried_df.empty:
-            self.log_message("没有可供导出的数据。请先成功查询数据。") # "No data available for export. Please query data first."
+        Args:
+            dataframe (pd.DataFrame): The DataFrame to fingerprint.
+
+        Returns:
+            str: The hex digest of the MD5 hash.
+        """
+        # Using a sample of the dataframe to generate fingerprint
+        # This includes the first 5 rows and all column names
+        sample_data = dataframe.head().to_string() + "".join(dataframe.columns)
+        return hashlib.md5(sample_data.encode('utf-8')).hexdigest()
+
+    def import_to_mysql(self):
+        """
+        Handles the entire Excel to MySQL import process.
+        
+        Steps:
+        1. Retrieves Excel file path and database/table details from UI.
+        2. Validates inputs.
+        3. Reads data from Excel using pandas.
+        4. Connects to MySQL using pymysql for DDL operations (CREATE DATABASE/TABLE IF NOT EXISTS).
+        5. Generates a data fingerprint for the Excel data.
+        6. Connects to MySQL using SQLAlchemy for data operations.
+        7. Checks if the table exists and if the data fingerprint is already present to avoid duplicates.
+        8. Appends the DataFrame to the MySQL table using SQLAlchemy's `to_sql`.
+           - Includes the data fingerprint as a new column.
+           - Specifies data types for columns, especially for strings and potential large text.
+        9. Ensures 'id' (auto-increment primary key) and 'import_time' (timestamp) columns exist,
+           creating them if necessary using ALTER TABLE.
+        10. Logs success or errors to the console and updates status display.
+        11. Handles various exceptions (file errors, database errors, etc.).
+        12. Ensures database connections are closed/disposed in a finally block.
+        """
+        excel_file_path = self.file_path_edit.text()
+        if not excel_file_path:
+            self.log_message("错误: 未选择Excel文件 (Error: No Excel file selected).")
             return
 
-        # Get the file path from the QLineEdit
-        file_path = self.query_export_path_edit.text().strip()
-        if not file_path:
-            self.log_message("错误: 请先选择或输入导出文件路径。") # "Error: Please select or enter an export file path."
-            return
+        # Disable import button during operation and update status
+        self.btn_import.setEnabled(False)
+        self.current_status_text = "正在导入... (Importing...)"
+        self.update_status_display()
+        self.log_message(f"开始从 {excel_file_path} 导入数据 (Starting data import from {excel_file_path})...")
+        QApplication.processEvents() # Keep UI responsive
 
-        # Get the selected export format
-        export_format = self.query_export_format_combo.currentText()
-        self.log_message(f"Attempting to export data as {export_format} to: {file_path}")
+        # Retrieve database and table details from UI (for import section)
+        db_name = self.db_name_edit.text().strip()
+        db_user = self.db_user_edit.text().strip()
+        db_password = self.db_password_edit.text() # Password not stripped
+        table_name = self.table_name_edit.text().strip()
+        db_host = 'localhost' # Hardcoded as per original requirement, can be made a field
+
+        # Input validation for DB details
+        if not all([db_name, db_user, table_name]): # Password can be empty for some MySQL setups
+            self.log_message("错误: 数据库名称、用户名和表名称不能为空。(Error: DB Name, User, and Table Name cannot be empty).")
+            self.current_status_text = "导入失败 (Import failed)"
+            self.update_status_display()
+            self.btn_import.setEnabled(True) # Re-enable import button
+            return
+        
+        pymysql_conn = None # For DDL operations
+        sqlalchemy_engine = None # For data operations (to_sql)
 
         try:
-            # Save the DataFrame to the specified format
-            if export_format == "CSV":
-                self.current_queried_df.to_csv(file_path, index=False, encoding='utf-8-sig') # utf-8-sig for CSV with BOM
-            elif export_format == "XLSX":
-                self.current_queried_df.to_excel(file_path, index=False)
-            else:
-                # This case should ideally not be reached if ComboBox items are fixed
-                self.log_message(f"错误: 不支持的导出格式 {export_format}。") # "Error: Unsupported export format."
+            # --- 1. Read Excel file ---
+            self.log_message("正在读取Excel文件 (Reading Excel file)...")
+            QApplication.processEvents()
+            df = pd.read_excel(excel_file_path)
+            if df.empty:
+                self.log_message("警告: Excel文件为空，没有数据可导入。(Warning: Excel file is empty).")
+                self.current_status_text = "文件为空 (File empty)"
+                self.update_status_display()
+                self.btn_import.setEnabled(True)
                 return
-            
-            self.log_message(f"数据已成功导出到: {file_path}") # "Data successfully exported to: {file_path}"
+            self.log_message(f"成功读取 {df.shape[0]} 行, {df.shape[1]} 列数据。(Successfully read {df.shape[0]} rows, {df.shape[1]} columns).")
 
-        except Exception as e:
-            self.log_message(f"导出数据时发生错误: {e}") # "Error occurred during data export:"
-            import traceback
-            self.log_message(traceback.format_exc()) # Log full traceback for debugging
+            # --- 2. Database/Table Creation (using pymysql for DDL) ---
+            self.log_message("正在连接数据库并准备表 (Connecting to DB and preparing table)...")
+            QApplication.processEvents()
+            # Connect without specifying db_name first to create it if it doesn't exist
+            pymysql_conn = pymysql.connect(host=db_host, user=db_user, password=db_password, charset='utf8')
+            with pymysql_conn.cursor() as cursor:
+                cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8 COLLATE utf8_general_ci")
+                self.log_message(f"数据库 '{db_name}' 已确保存在。(Database '{db_name}' ensured).")
+                cursor.execute(f"USE `{db_name}`") # Switch to the target database
+            pymysql_conn.commit() 
+            
+            # --- 3. Data Fingerprint & Duplication Check ---
+            fingerprint = self.generate_data_fingerprint(df)
+            self.log_message(f"数据指纹 (Data fingerprint): {fingerprint}")
+
+            # Create SQLAlchemy engine for data insertion and inspection
+            engine_url = f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}?charset=utf8"
+            sqlalchemy_engine = create_engine(engine_url)
+            
+            table_exists = sqlalchemy_inspect(sqlalchemy_engine).has_table(table_name)
+            if table_exists:
+                self.log_message(f"表 '{table_name}' 已存在。检查重复数据... (Table '{table_name}' exists. Checking for duplicates...)")
+                try:
+                    # Check if 'data_fingerprint' column exists in the table
+                    columns_in_db = [col['name'] for col in sqlalchemy_inspect(sqlalchemy_engine).get_columns(table_name)]
+                    if 'data_fingerprint' in columns_in_db:
+                        # Check if this specific fingerprint already exists
+                        with sqlalchemy_engine.connect() as connection:
+                            result = connection.execute(text(f"SELECT 1 FROM `{table_name}` WHERE `data_fingerprint` = :fp LIMIT 1"), {'fp': fingerprint})
+                            if result.scalar_one_or_none(): # If a row with this fingerprint is found
+                                self.log_message(f"数据指纹 {fingerprint} 已存在于表 '{table_name}'。跳过导入以避免重复。(Fingerprint {fingerprint} already exists. Skipping import.)")
+                                self.current_status_text = "数据重复，跳过 (Duplicate data, skipped)"
+                                self.update_status_display()
+                                self.btn_import.setEnabled(True)
+                                return # Stop import process
+                    else:
+                        self.log_message("警告: 表已存在但无 'data_fingerprint' 列。无法精确去重，将追加数据。(Warning: Table exists but no 'data_fingerprint' column. Appending data.)")
+                except Exception as e_dup_check:
+                    self.log_message(f"检查重复数据时出错 (Error checking duplicates): {e_dup_check}。将尝试追加数据。(Appending data.)")
+
+
+            # --- 4. Import Data (using SQLAlchemy's to_sql) ---
+            self.log_message("正在导入数据到MySQL (Importing data to MySQL)...")
+            QApplication.processEvents()
+            df['data_fingerprint'] = fingerprint # Add fingerprint column to DataFrame
+            
+            # Define SQLAlchemy types for DataFrame columns to ensure correct table creation/insertion
+            dtypedict = {'data_fingerprint': sqlalchemy_types.VARCHAR(32)} # MD5 hash is 32 chars
+            for col in df.columns:
+                if col != 'data_fingerprint': # Skip already defined fingerprint column
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        dtypedict[col] = sqlalchemy_types.DateTime()
+                    elif pd.api.types.is_integer_dtype(df[col]):
+                        if df[col].isnull().any(): # If integers have NaNs, pandas loads as float
+                             dtypedict[col] = sqlalchemy_types.Float() 
+                        else: # Pure integers
+                             dtypedict[col] = sqlalchemy_types.BigInteger() # Use BigInteger for safety
+                    elif pd.api.types.is_float_dtype(df[col]):
+                        dtypedict[col] = sqlalchemy_types.Float()
+                    elif pd.api.types.is_string_dtype(df[col]):
+                        # Estimate max length for VARCHAR or use TEXT for very long strings
+                        max_len = df[col].str.len().max()
+                        if pd.isna(max_len) or max_len > 1000 : # Heuristic for using TEXT (e.g., > 1000 chars)
+                            dtypedict[col] = sqlalchemy_types.TEXT()
+                        else:
+                            # Ensure length is at least 1 if max_len is 0 (e.g. all empty strings)
+                            dtypedict[col] = sqlalchemy_types.VARCHAR(int(max_len) if max_len > 0 else 1) 
+            
+            # Perform the import using df.to_sql
+            df.to_sql(name=table_name, 
+                      con=sqlalchemy_engine, 
+                      if_exists='append',  # Append data if table exists
+                      index=False,         # Do not write DataFrame index as a column
+                      chunksize=1000,      # Import in chunks for large DataFrames
+                      dtype=dtypedict)     # Specify column types
+            
+            self.imported_rows_count = df.shape[0]
+            self.log_message(f"成功导入 {self.imported_rows_count} 行数据到表 '{table_name}'。(Successfully imported {self.imported_rows_count} rows).")
+
+            # --- 5. Add 'id' and 'import_time' columns if they don't exist ---
+            # These are common utility columns.
+            with sqlalchemy_engine.connect() as connection:
+                trans = connection.begin() # Start a transaction for DDL changes
+                try:
+                    current_columns_meta = sqlalchemy_inspect(sqlalchemy_engine).get_columns(table_name, schema=db_name)
+                    current_columns_names = [col['name'] for col in current_columns_meta]
+                    
+                    if 'id' not in current_columns_names:
+                        self.log_message(f"正在为表 '{table_name}' 添加 'id' 列 (Adding 'id' column to '{table_name}')...")
+                        # Add 'id' as auto-incrementing primary key, placed first
+                        connection.execute(text(f"ALTER TABLE `{db_name}`.`{table_name}` ADD COLUMN `id` INT AUTO_INCREMENT PRIMARY KEY FIRST;"))
+                    
+                    if 'import_time' not in current_columns_names:
+                        self.log_message(f"正在为表 '{table_name}' 添加 'import_time' 列 (Adding 'import_time' column to '{table_name}')...")
+                        # Add 'import_time' with default current timestamp
+                        connection.execute(text(f"ALTER TABLE `{db_name}`.`{table_name}` ADD COLUMN `import_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
+                    
+                    trans.commit() # Commit DDL changes
+                    self.log_message("必要的 'id' 和 'import_time' 列已确保存在。(Ensured 'id' and 'import_time' columns exist).")
+                except Exception as alter_e:
+                    trans.rollback() # Rollback on error
+                    self.log_message(f"添加辅助列时出错 (Error adding auxiliary columns): {alter_e}")
+
+            self.current_status_text = "导入成功 (Import successful)"
+
+        except pd.errors.EmptyDataError: # Specific pandas error for empty Excel
+            self.log_message("错误: Excel文件为空或格式不受支持。(Error: Excel file empty or unsupported format).")
+            self.current_status_text = "导入失败: 文件空 (Import failed: File empty)"
+        except pymysql.Error as e_pymysql: # Errors from pymysql (DDL part)
+            self.log_message(f"数据库连接或操作错误 (pymysql): {e_pymysql} (DB connection/operation error (pymysql)).")
+            self.current_status_text = "导入失败: DB错误 (Import failed: DB error)"
+        except sqlalchemy_exc.SQLAlchemyError as e_sqlalchemy: # Errors from SQLAlchemy (Data part)
+            self.log_message(f"数据库操作错误 (SQLAlchemy): {e_sqlalchemy} (DB operation error (SQLAlchemy)).")
+            self.current_status_text = "导入失败: DB错误 (Import failed: DB error)"
+            self.log_message(traceback.format_exc()) # Log full traceback for SQLAlchemy errors
+        except Exception as e_general: # Catch-all for other errors
+            self.log_message(f"导入过程中发生未知错误: {e_general} (Unknown error during import).")
+            self.current_status_text = "导入失败: 未知错误 (Import failed: Unknown error)"
+            self.log_message(traceback.format_exc()) # Log full traceback
+        finally:
+            # Ensure connections are closed/disposed
+            if pymysql_conn and pymysql_conn.open:
+                pymysql_conn.close()
+                self.log_message("Pymysql连接已关闭。(Pymysql connection closed).")
+            if sqlalchemy_engine:
+                sqlalchemy_engine.dispose()
+                self.log_message("SQLAlchemy引擎已释放。(SQLAlchemy engine disposed).")
+            
+            self.btn_import.setEnabled(True) # Re-enable import button
+            self.update_status_display() # Update status on UI
+            self.log_message("导入操作完成。(Import operation finished).")
+            QApplication.processEvents()
+
+    def log_message(self, message):
+        """
+        Appends a timestamped message to the console output QTextEdit.
+        Ensures the console automatically scrolls to the latest message.
+        
+        Args:
+            message (str): The message to log.
+        """
+        timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+        self.console_output.append(f"[{timestamp}] {message}")
+        self.console_output.ensureCursorVisible() # Auto-scroll to the bottom
+
+    def update_time(self):
+        """
+        Updates the status bar label with the current system time.
+        Called periodically by self.timer.
+        """
+        current_time = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+        self.status_bar_label.setText(f"当前时间 (Current Time): {current_time}")
+
+    def update_status_display(self): 
+        """
+        Updates the QLineEdit fields that display the number of imported rows
+        and the current operation status text.
+        """
+        self.rows_imported_edit.setText(str(self.imported_rows_count))
+        self.operation_status_edit.setText(self.current_status_text)
 
     def query_data_from_db(self):
         """
-        Queries data from the specified MySQL database based on user inputs.
-        Retrieves connection details, table name, and date range from UI elements.
-        Fetches data using pandas and pymysql, then populates a QTableView.
-        Handles errors during the process and logs messages to the console.
+        Queries data from the specified MySQL database and table based on user inputs.
+        
+        Steps:
+        1. Retrieves database connection details, table name, and date range from UI.
+        2. Validates inputs (required fields, date order).
+        3. Constructs an SQL query to select data within the date range.
+           (Assumes a date column named 'Date' in the target table).
+        4. Connects to the database using SQLAlchemy.
+        5. Fetches data into a pandas DataFrame using `pd.read_sql_query()`.
+        6. If data is found:
+           - Logs DataFrame structure and head for diagnostics.
+           - Populates `self.query_data_preview_table` (QTableView) with the data.
+           - Enables the "Download Data" button.
+           - Stores the DataFrame in `self.current_queried_df`.
+        7. If no data or an error occurs, clears the table, disables download, and resets `self.current_queried_df`.
+        8. Handles various exceptions (DB connection, SQL errors, etc.).
+        9. Ensures the SQLAlchemy engine is disposed of.
         """
         self.log_message("Initiating data query from database...")
+        QApplication.processEvents() # Keep UI responsive
 
-        # Retrieve database connection details and query parameters from QLineEdit and QDateEdit widgets
+        # Retrieve query parameters from UI fields
         host = self.query_db_host_edit.text().strip()
         user = self.query_db_user_edit.text().strip()
-        password = self.query_db_password_edit.text() # Password is taken as is, without stripping whitespace
+        password = self.query_db_password_edit.text() # Password not stripped
         db_name = self.query_db_name_edit.text().strip()
-        table_name = self.query_table_name_edit.text().strip()
-        
-        start_date_q = self.query_start_date_edit.date() # QDate object for start date
-        end_date_q = self.query_end_date_edit.date()     # QDate object for end date
+        table_name = self.query_table_name_edit.text().strip() 
 
-        # --- Input Validation ---
-        # Check if essential fields are filled
-        if not all([host, user, db_name, table_name]):
-            self.log_message("错误: 主机, 用户, 数据库名, 和 表名 不能为空。") # "Error: Host, User, DB Name, and Table Name cannot be empty."
-            self.query_data_preview_table.setModel(None) # Clear table view
-            self.btn_download_data.setEnabled(False)     # Disable download button
-            self.current_queried_df = None               # Clear stored DataFrame
+        # Input validation for query parameters
+        if not all([host, user, db_name, table_name]): # Password can be empty
+            self.log_message("错误: 主机, 用户名, 数据库名称和表名称为必填项。(Error: Host, User, DB Name, and Table Name are required).")
+            self.query_data_preview_table.setModel(None) # Clear table
+            self.btn_download_data.setEnabled(False)
+            self.current_queried_df = None
             return
 
-        # Check if the start date is after the end date
+        start_date_q = self.query_start_date_edit.date() # QDate object
+        end_date_q = self.query_end_date_edit.date()   # QDate object
+
         if start_date_q > end_date_q:
-            self.log_message("错误: 开始日期不能晚于结束日期。") # "Error: Start date cannot be later than end date."
+            self.log_message("错误: 开始日期不能晚于结束日期。(Error: Start date cannot be after end date).")
             self.query_data_preview_table.setModel(None)
             self.btn_download_data.setEnabled(False)
             self.current_queried_df = None
             return
 
-        # --- Date Formatting for SQL Query ---
         start_date_str = start_date_q.toString("yyyy-MM-dd")
-        # End date string, also in 'yyyy-MM-dd' format for DATE() comparison.
         end_date_str = end_date_q.toString("yyyy-MM-dd") 
-        
-        self.log_message(f"Querying table `{table_name}` from {start_date_str} to {end_date_str}.")
 
-        # --- SQL Query Construction ---
-        # Uses DATE() function on the 'Date' column to compare only the date part.
-        # This makes the comparison robust against varying time components in the 'Date' field.
+        self.log_message(f"Querying table `{table_name}` in database `{db_name}` from {start_date_str} to {end_date_str}.")
+        
+        # Construct SQL query. Assumes a date column named 'Date'.
+        # This might need to be configurable if the date column name varies.
+        # The DATE() function in SQL extracts the date part from a datetime column.
         sql_query = f"SELECT * FROM `{table_name}` WHERE DATE(`Date`) >= '{start_date_str}' AND DATE(`Date`) <= '{end_date_str}'"
         self.log_message(f"Executing SQL: {sql_query}")
 
-        conn = None # Initialize connection variable
+        engine = None # Initialize engine to None for finally block
         try:
-            # --- Database Connection ---
+            # --- Database Connection (SQLAlchemy) ---
             self.log_message(f"Connecting to database '{db_name}' on host '{host}' with user '{user}'...")
-            conn_config = {
-                'host': host,
-                'user': user,
-                'password': password,
-                'database': db_name,
-                'charset': 'utf8', # Changed from utf8mb4 to utf8 for compatibility
-                'cursorclass': pymysql.cursors.DictCursor # Fetch results as dictionaries (optional, good for pandas)
-            }
-            conn = pymysql.connect(**conn_config)
-            self.log_message("Database connection successful.")
-
-            # --- Data Fetching ---
-            self.log_message("Fetching data...")
-            # Use pandas to execute the SQL query and load results into a DataFrame
-            df = pd.read_sql_query(sql_query, conn)
+            QApplication.processEvents()
+            engine_url = f"mysql+pymysql://{user}:{password}@{host}/{db_name}?charset=utf8"
+            engine = create_engine(engine_url) # Create SQLAlchemy engine
             
-            if df.empty:
-                self.log_message("未查询到数据。") # "No data found."
-                self.query_data_preview_table.setModel(None) # Clear table
-                self.btn_download_data.setEnabled(False)     # Disable download
-                self.current_queried_df = None               # Clear DataFrame
-            else:
-                self.log_message(f"成功获取 {len(df)} 行数据。正在填充表格...") # "Successfully fetched {len(df)} rows. Populating table..."
-                
-                # --- Populate QTableView ---
-                # Create an empty QStandardItemModel. Rows will be appended.
-                model = QStandardItemModel() 
-                model.setHorizontalHeaderLabels(list(df.columns)) # Set column headers correctly.
-                
-                # Iterate over the DataFrame rows and columns to populate the model
-                # using df.iloc for precise cell access.
-                for i in range(len(df)):  # Iterate through row indices
-                    row_items = []
-                    for j in range(len(df.columns)):  # Iterate through column indices
-                        item_value = df.iloc[i, j]
-                        # Convert item_value to string, handle None or other types if necessary
-                        item_text = str(item_value) if item_value is not None else ""
-                        standard_item = QStandardItem(item_text)
-                        standard_item.setEditable(False) # Make cells non-editable
-                        row_items.append(standard_item)
-                    model.appendRow(row_items) # Append the list of items as a new row
-                
-                self.query_data_preview_table.setModel(model) # Set the model to the QTableView
-                self.query_data_preview_table.resizeColumnsToContents() # Adjust column widths to fit content
-                self.btn_download_data.setEnabled(True)     # Enable the download button
-                self.current_queried_df = df                # Store the fetched DataFrame
-                self.log_message("数据已成功加载到预览表格。") # "Data successfully loaded into preview table."
+            self.log_message("Database connection successful via SQLAlchemy engine.")
+            self.log_message("Fetching data...")
+            QApplication.processEvents()
 
-        except pymysql.Error as e: # Catch specific PyMySQL errors (e.g., connection, query execution)
-            self.log_message(f"数据库错误: {e}") # "Database error:"
+            # --- Data Fetching (pandas) ---
+            df = pd.read_sql_query(sql_query, engine)
+
+            # --- Process Fetched DataFrame ---
+            if df.empty:
+                self.log_message("未查询到数据 (No data found for the given criteria).")
+                self.query_data_preview_table.setModel(None) # Clear previous results
+                self.btn_download_data.setEnabled(False)
+                self.current_queried_df = None
+            else:
+                self.log_message(f"成功获取 {len(df)} 行数据。正在填充表格...(Successfully fetched {len(df)} rows. Populating table...)")
+                # Log some info about the DataFrame for diagnostics
+                self.log_message(f"DataFrame columns: {list(df.columns)}")
+                self.log_message(f"First few rows of DataFrame (up to 5):\n{df.head().to_string()}")
+                
+                # Populate QTableView with the DataFrame data
+                model = QStandardItemModel(df.shape[0], df.shape[1]) # Rows, Columns
+                model.setHorizontalHeaderLabels(list(df.columns)) # Set column headers
+
+                for i in range(df.shape[0]): # Iterate rows
+                    for j in range(df.shape[1]): # Iterate columns
+                        item_value = str(df.iloc[i, j]) # Get cell value as string
+                        item = QStandardItem(item_value)
+                        item.setEditable(False) # Make cells in table view non-editable
+                        model.setItem(i, j, item) # Set item in model
+                
+                self.query_data_preview_table.setModel(model) # Set model to table view
+                self.query_data_preview_table.resizeColumnsToContents() # Adjust column widths
+                self.btn_download_data.setEnabled(True) # Enable download button
+                self.current_queried_df = df # Store DataFrame for potential download
+                self.log_message("数据已成功加载到预览表格。(Data successfully loaded into preview table).")
+
+        except sqlalchemy_exc.OperationalError as e_op_sql: # Specific error for DB connection issues
+            self.log_message(f"数据库连接失败 (SQLAlchemy OperationalError): {e_op_sql} (DB Connection Failed).")
             self.query_data_preview_table.setModel(None)
             self.btn_download_data.setEnabled(False)
             self.current_queried_df = None
-        except pd.errors.DatabaseError as e: # Catch pandas-specific database errors
-             self.log_message(f"Pandas数据库读取错误: {e}") # "Pandas database read error:"
+        except pymysql.Error as e_pymysql_query: # Errors from underlying pymysql driver during query
+            self.log_message(f"数据库错误 (pymysql): {e_pymysql_query} (DB Error (pymysql)).")
+            self.query_data_preview_table.setModel(None)
+            self.btn_download_data.setEnabled(False)
+            self.current_queried_df = None
+        except pd.errors.DatabaseError as e_pd_db: # Errors from pandas during read_sql_query
+             self.log_message(f"Pandas数据库读取错误: {e_pd_db}. 可能查询或表名有问题。(Pandas DB Read Error. Possible issue with query or table name).")
              self.query_data_preview_table.setModel(None)
              self.btn_download_data.setEnabled(False)
              self.current_queried_df = None
-        except Exception as e: # Catch any other unexpected errors
-            self.log_message(f"查询数据时发生未知错误: {e}") # "An unknown error occurred while querying data:"
-            import traceback
-            self.log_message(traceback.format_exc()) # Log the full traceback for debugging
+        except Exception as e_generic_query: # Catch-all for other errors
+            self.log_message(f"查询数据时发生未知错误: {e_generic_query} (Unknown error during data query).")
+            self.log_message(traceback.format_exc()) # Log full traceback
             self.query_data_preview_table.setModel(None)
             self.btn_download_data.setEnabled(False)
             self.current_queried_df = None
         finally:
             # --- Resource Cleanup ---
-            if conn:
-                conn.close() # Ensure the database connection is closed
-                self.log_message("Database connection closed.")
-            QApplication.processEvents() # Process any pending UI events
+            if engine:
+                engine.dispose() # Release database connection pool
+                self.log_message("SQLAlchemy engine disposed.")
+            QApplication.processEvents() # Final UI update
 
+    def select_export_file_path(self):
+        """
+        Opens a QFileDialog to allow the user to select a file path and name
+        for exporting the queried data. The file type (CSV/XLSX) is determined
+        by the current selection in the export format ComboBox.
+        """
+        export_format = self.query_export_format_combo.currentText() # "CSV" or "XLSX"
+        default_filename = "exported_data" # Base for suggested filename
+        filter_string = "" # File dialog filter
 
-    def select_excel_file(self):
+        if export_format == "CSV":
+            default_filename += ".csv"
+            filter_string = "CSV files (*.csv);;All Files (*)"
+        elif export_format == "XLSX":
+            default_filename += ".xlsx"
+            filter_string = "Excel files (*.xlsx);;All Files (*)"
+        else: # Fallback, though current UI restricts to CSV/XLSX
+            filter_string = "All Files (*)"
+
         options = QFileDialog.Options()
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "选择Excel文件", "",
-            "Excel Files (*.xlsx *.xls);;All Files (*)",
-            options=options
-        )
-        if file_name:
-            self.file_path.setText(file_name)
-            self.btn_import.setEnabled(True)
-            self.log_message(f"已选择文件: {file_name}")
-        else:
-            self.btn_import.setEnabled(False)
+        # options |= QFileDialog.DontUseNativeDialog # Uncomment for Qt's own dialog
+        file_name, _ = QFileDialog.getSaveFileName(self, 
+                                                   "保存文件 (Save File)", 
+                                                   default_filename, # Suggested filename
+                                                   filter_string, 
+                                                   options=options)
+        
+        if file_name: # If a file name was chosen (dialog not cancelled)
+            # QFileDialog might not enforce the extension from the filter on all platforms/settings.
+            # Ensure the filename has the correct extension corresponding to the selected format.
+            if export_format == "CSV" and not file_name.lower().endswith(".csv"):
+                file_name += ".csv"
+            elif export_format == "XLSX" and not file_name.lower().endswith(".xlsx"):
+                file_name += ".xlsx"
+            
+            self.query_export_path_edit.setText(file_name) # Update the QLineEdit
+            self.log_message(f"导出路径已选择 (Export path selected): {file_name}")
 
-    def import_to_mysql(self):
-        excel_file = self.file_path.text()
-        if not excel_file:
-            self.log_message("错误: 请先选择Excel文件")
+    def download_queried_data(self):
+        """
+        Downloads the currently stored queried data (self.current_queried_df)
+        to a file in the format specified by the user (CSV or XLSX).
+        The file path is taken from `self.query_export_path_edit`.
+        """
+        self.log_message("Initiating data download...")
+        QApplication.processEvents() # Keep UI responsive
+
+        # Validate that there is data to export
+        if self.current_queried_df is None or self.current_queried_df.empty:
+            self.log_message("没有可供导出的数据 (No data available for export).")
             return
 
-        self.btn_import.setEnabled(False)
-        self.status = "处理中..."
-        self.update_status()
-        QApplication.processEvents()
+        # Validate that an export path has been specified
+        file_path = self.query_export_path_edit.text().strip()
+        if not file_path:
+            self.log_message("请先选择或输入导出文件路径 (Please select or enter an export file path).")
+            # Optionally, could trigger self.select_export_file_path() here if desired.
+            return
 
-        conn = None
-        cursor = None
-        engine = None
+        export_format = self.query_export_format_combo.currentText() # "CSV" or "XLSX"
+        self.log_message(f"Attempting to export data as {export_format} to: {file_path}")
 
         try:
-            self.log_message("正在读取Excel文件...")
-            df = pd.read_excel(excel_file)
-            if df.empty:
-                self.log_message("警告: Excel文件为空，跳过导入")
-                self.status = "完成 (无数据)"
+            # --- Perform Export using pandas ---
+            if export_format == "CSV":
+                # Use utf-8-sig for CSV to ensure BOM for Excel compatibility with UTF-8 chars
+                self.current_queried_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            elif export_format == "XLSX":
+                # Requires 'openpyxl' engine for .xlsx format.
+                # User might need to install it: pip install openpyxl
+                self.current_queried_df.to_excel(file_path, index=False, engine='openpyxl') 
+            else: # Should not be reached with current ComboBox setup
+                self.log_message(f"不支持的导出格式: {export_format} (Unsupported export format).")
                 return
-            self.log_message(f"成功读取Excel文件，共 {len(df)} 行数据")
+            
+            self.log_message(f"数据已成功导出到: {file_path} (Data successfully exported to {file_path}).")
 
-            config = {
-                'user': self.db_user.text(),
-                'password': self.db_password.text(),
-                'host': 'localhost',
-                'charset': 'utf8',
-                'use_unicode': True
-            }
-            self.log_message("正在连接MySQL数据库...")
-            conn = pymysql.connect(**config)
-            cursor = conn.cursor()
-            db_name = self.db_name.text()
-            self.log_message(f"正在创建/使用数据库: {db_name}")
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8 COLLATE utf8_general_ci")
-            cursor.execute(f"USE `{db_name}`")
-            table_name = self.table_name.text()
-
-            def generate_data_fingerprint(dataframe):
-                sample_data = dataframe.head(min(5, len(dataframe))).to_string(index=False)
-                return hashlib.md5(sample_data.encode('utf-8')).hexdigest()
-
-            current_fingerprint = generate_data_fingerprint(df)
-            self.log_message("已生成数据指纹用于重复检查")
-            cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-            table_exists = cursor.fetchone() is not None
-
-            if table_exists:
-                self.log_message(f"表 {table_name} 已存在，检查重复数据...")
-                try:
-                    cursor.execute(f"SHOW COLUMNS FROM `{table_name}` LIKE 'data_fingerprint'")
-                    has_fingerprint_column = cursor.fetchone() is not None
-                    if has_fingerprint_column:
-                        cursor.execute(f"SELECT 1 FROM `{table_name}` WHERE `data_fingerprint` = %s LIMIT 1", (current_fingerprint,))
-                        if cursor.fetchone() is not None:
-                            self.log_message("检测到相似数据批次 (基于指纹)，跳过导入")
-                            self.status = "完成 (跳过重复数据)"
-                            return
-                    else:
-                        self.log_message(f"警告: 表 {table_name} 不存在 'data_fingerprint' 列。")
-                except pymysql.Error as e:
-                    self.log_message(f"检查表结构时出错: {e}. 继续尝试导入...")
-
-            engine_url = f"mysql+pymysql://{config['user']}:{config['password']}@{config['host']}/{db_name}?charset=utf8"
-            engine = create_engine(engine_url)
-            df['data_fingerprint'] = current_fingerprint
-            custom_dtype = {'data_fingerprint': sqlalchemy.types.VARCHAR(32)}
-
-            self.log_message("正在导入数据到MySQL...")
-            df.to_sql(
-                name=table_name,
-                con=engine,
-                if_exists='append',
-                index=False,
-                chunksize=1000,
-                dtype=custom_dtype if not table_exists else None
-            )
-
-            if not table_exists:
-                with engine.connect() as connection:
-                    trans = connection.begin()
-                    try:
-                        inspector = sqlalchemy.inspect(engine)
-                        columns_in_table = [col['name'] for col in inspector.get_columns(table_name)]
-                        if 'id' not in columns_in_table:
-                            connection.execute(text(f"ALTER TABLE `{table_name}` ADD COLUMN `id` INT AUTO_INCREMENT PRIMARY KEY FIRST;"))
-                            self.log_message(f"Added AUTO_INCREMENT PRIMARY KEY 'id' to new table '{table_name}'.")
-                        if 'import_time' not in columns_in_table:
-                            connection.execute(text(f"ALTER TABLE `{table_name}` ADD COLUMN `import_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
-                            self.log_message(f"Added 'import_time' column to new table '{table_name}'.")
-                        trans.commit()
-                    except Exception as alter_e:
-                        trans.rollback()
-                        self.log_message(f"添加列时出错 (可能已存在或其它问题): {alter_e}")
-
-            self.imported_rows = len(df)
-            self.log_message(f"成功导入 {self.imported_rows} 行数据到表 '{table_name}'")
-            self.log_message("正在从数据库导出当前批次数据到CSV和Excel...")
-            export_df = pd.read_sql(f"SELECT * FROM `{table_name}` WHERE `data_fingerprint` = '{current_fingerprint}'", engine)
-
-            if not export_df.empty:
-                csv_output = 'output_current_import.csv'
-                export_df.to_csv(csv_output, index=False, encoding='utf-8-sig')
-                self.log_message(f"当前导入批次数据已导出到: {csv_output}")
-                excel_output = 'output_current_import.xlsx'
-                export_df.to_excel(excel_output, index=False)
-                self.log_message(f"当前导入批次数据已导出到: {excel_output}")
-            else:
-                self.log_message("没有数据导出（当前批次未找到或为空）。")
-            self.status = "完成 (成功)"
-
-        except Exception as e_outer:
-            self.log_message(f"发生错误: {str(e_outer)}")
-            import traceback
-            self.log_message(traceback.format_exc())
-            self.status = "完成 (失败)"
+        except Exception as e_export: # Catch any error during file writing
+            self.log_message(f"导出数据时发生错误: {e_export} (Error during data export).")
+            self.log_message(traceback.format_exc()) # Log full traceback
         finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
-            if engine:
-                engine.dispose()
+            QApplication.processEvents() # Final UI update
 
-            self.btn_import.setEnabled(True)
-            self.update_status()
-            QApplication.processEvents()
-
-    def log_message(self, message):
-        timestamp = QDateTime.currentDateTime().toString("hh:mm:ss")
-        self.console_output.append(f"[{timestamp}] {message}")
-        self.console_output.ensureCursorVisible()
-
-    def update_time(self):
-        current_time = QDateTime.currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
-        self.status_bar.setText(f"系统时间: {current_time}")
-
-    def update_status(self):
-        self.rows_imported.setText(str(self.imported_rows))
-        self.operation_status.setText(self.status)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    font = QFont("微软雅黑", 10)
-    app.setFont(font)
+    
+    # It's good practice to set application-wide font here if desired,
+    # though it's also set in set_lightblue_style for the main window.
+    # default_font = QFont("微软雅黑", 10)
+    # app.setFont(default_font)
+
     window = ExcelToMySQLApp()
     window.show()
     sys.exit(app.exec_())
