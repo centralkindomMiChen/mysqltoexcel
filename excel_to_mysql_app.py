@@ -21,10 +21,11 @@ class ExcelToMySQLApp(QMainWindow):
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setSpacing(10)
+        # self.main_layout will be reassigned in init_ui to the new QHBoxLayout
+        # self.main_layout = QVBoxLayout(self.central_widget) 
+        # self.main_layout.setSpacing(10)
 
-        self.init_ui()
+        self.init_ui() # Call to the refactored UI setup
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
@@ -229,28 +230,93 @@ class ExcelToMySQLApp(QMainWindow):
         self.setFont(font)
 
     def init_ui(self):
-        self.create_control_group()
-        self.create_db_info_group()
-        self.create_table_info_group()
+        """
+        Initializes the main UI layout.
+        The UI is structured into a two-column layout:
+        - Left Panel: Contains all control and input group boxes.
+        - Right Panel: Displays the data preview table and console output.
+        An outer QVBoxLayout ensures the status bar remains at the bottom of the central widget.
+        """
         
-        # Add the new Query and Export GroupBox
-        self.query_export_group = self.create_query_export_group()
-        self.main_layout.addWidget(self.query_export_group)
-        
-        self.create_console_group()
+        # This QHBoxLayout forms the main two-column structure (left and right panels).
+        app_main_hbox_layout = QHBoxLayout() 
+        app_main_hbox_layout.setSpacing(10)
 
-        self.status_bar = QLabel()
+        # --- Left Panel: Controls and Inputs ---
+        # This widget and its QVBoxLayout will hold all user input group boxes.
+        left_panel_widget = QWidget()
+        left_panel_vbox = QVBoxLayout(left_panel_widget) # Layout for the left panel
+        left_panel_vbox.setSpacing(10)
+        left_panel_vbox.setContentsMargins(0,0,0,0) 
+
+        # Create and add 'Control Panel' group box to the left panel.
+        self.control_group = self.create_control_group()
+        left_panel_vbox.addWidget(self.control_group)
+
+        # Create and add 'Database Info' group box to the left panel.
+        self.db_info_group = self.create_db_info_group()
+        left_panel_vbox.addWidget(self.db_info_group)
+
+        # Create and add 'Table Info' group box to the left panel.
+        self.table_info_group = self.create_table_info_group()
+        left_panel_vbox.addWidget(self.table_info_group)
+        
+        # Create and add 'Database Query and Export' settings group box to the left panel.
+        self.query_export_settings_group = self.create_query_export_group() 
+        left_panel_vbox.addWidget(self.query_export_settings_group)
+        
+        left_panel_vbox.addStretch(1) # Pushes all group boxes in the left panel upwards.
+
+        # Add the left panel widget to the main horizontal layout.
+        # The stretch factor of 1 for the left panel vs 3 for the right makes the right panel wider.
+        app_main_hbox_layout.addWidget(left_panel_widget, 1) 
+
+        # --- Right Panel: Data Display and Console ---
+        # This widget and its QVBoxLayout will hold the data preview table and console output.
+        right_panel_widget = QWidget()
+        right_panel_vbox = QVBoxLayout(right_panel_widget) # Layout for the right panel
+        right_panel_vbox.setSpacing(10)
+        right_panel_vbox.setContentsMargins(0,0,0,0)
+
+        # Add the Query Data Preview Table to the right panel.
+        # self.query_data_preview_table is instantiated within create_query_export_group().
+        # Stretch factor of 3 for the table view makes it take more vertical space than the console.
+        right_panel_vbox.addWidget(self.query_data_preview_table, 3) 
+
+        # Add the Console Output (QTextEdit) wrapped in a QGroupBox to the right panel.
+        self.console_output = self.create_console_output_widget() 
+        console_group_for_right_panel = QGroupBox("控制台输出") # Title in Chinese
+        console_layout_for_right_panel = QVBoxLayout()
+        console_layout_for_right_panel.addWidget(self.console_output)
+        console_group_for_right_panel.setLayout(console_layout_for_right_panel)
+        # Stretch factor of 2 for the console group.
+        right_panel_vbox.addWidget(console_group_for_right_panel, 2) 
+        
+        # Add the right panel widget to the main horizontal layout.
+        # Stretch factor of 3 makes the right panel wider than the left panel (which has a factor of 1).
+        app_main_hbox_layout.addWidget(right_panel_widget, 3)
+
+        # --- Overall Layout and Status Bar ---
+        # The outer_vbox_layout ensures that the status_bar is positioned correctly
+        # at the bottom of the central widget, underneath the two-column (app_main_hbox_layout) structure.
+        outer_vbox_layout = QVBoxLayout(self.central_widget) # Set this as the layout for the central widget
+        outer_vbox_layout.addLayout(app_main_hbox_layout) # Add the two-column layout first
+        
+        self.status_bar = QLabel() 
         self.status_bar.setAlignment(Qt.AlignCenter)
         self.status_bar.setStyleSheet(
             "padding: 4px; color: #255A8A; "
             "background-color: rgba(180,222,255,190); "
             "border-radius: 3px; font-weight:bold;"
         )
-        self.main_layout.addWidget(self.status_bar)
+        outer_vbox_layout.addWidget(self.status_bar) # Add status bar at the bottom
+        self.main_layout = outer_vbox_layout # The outermost layout is now the main_layout for central widget.
         self.update_time()
 
+
     def create_control_group(self):
-        group = QGroupBox("控制面板")
+        """Creates and returns the 'Control Panel' QGroupBox."""
+        group = QGroupBox("控制面板") # Title in Chinese
         layout = QHBoxLayout()
         layout.setSpacing(10)
 
@@ -269,10 +335,12 @@ class ExcelToMySQLApp(QMainWindow):
         layout.addWidget(self.btn_import)
 
         group.setLayout(layout)
-        self.main_layout.addWidget(group)
+        # self.main_layout.addWidget(group) # Removed: init_ui will add it
+        return group
 
     def create_db_info_group(self):
-        group = QGroupBox("数据库信息")
+        """Creates and returns the 'Database Info' QGroupBox."""
+        group = QGroupBox("数据库信息") # Title in Chinese
         layout = QHBoxLayout()
         layout.setSpacing(8)
 
@@ -296,10 +364,12 @@ class ExcelToMySQLApp(QMainWindow):
         layout.addWidget(self.db_password, 1)
 
         group.setLayout(layout)
-        self.main_layout.addWidget(group)
+        # self.main_layout.addWidget(group) # Removed: init_ui will add it
+        return group
 
     def create_table_info_group(self):
-        group = QGroupBox("表信息")
+        """Creates and returns the 'Table Info' QGroupBox."""
+        group = QGroupBox("表信息") # Title in Chinese
         layout = QHBoxLayout()
         layout.setSpacing(8)
 
@@ -325,30 +395,29 @@ class ExcelToMySQLApp(QMainWindow):
         layout.addWidget(self.operation_status, 1)
 
         group.setLayout(layout)
-        self.main_layout.addWidget(group)
+        # self.main_layout.addWidget(group) # Removed: init_ui will add it
+        return group
 
-    def create_console_group(self):
-        group = QGroupBox("控制台输出")
-        layout = QVBoxLayout()
-        self.console_output = QTextEdit()
-        self.console_output.setObjectName("ConsoleOutput")
-        self.console_output.setReadOnly(True)
-        layout.addWidget(self.console_output)
-        group.setLayout(layout)
-        self.main_layout.addWidget(group)
-        self.main_layout.setStretchFactor(group, 1) # Console group takes available vertical space
+    def create_console_output_widget(self):
+        """Creates and returns the QTextEdit widget for console output."""
+        if not hasattr(self, 'console_output') or self.console_output is None:
+             # Ensure console_output is created if not already (e.g. if create_console_group was removed entirely)
+            self.console_output = QTextEdit()
+            self.console_output.setObjectName("ConsoleOutput")
+            self.console_output.setReadOnly(True)
+        return self.console_output
+
 
     def create_query_export_group(self):
         """
-        Creates the 'Database Query and Export' QGroupBox and its UI elements.
-        This section allows users to input database credentials, specify a date range and table,
-        query data, preview it in a table, and export it to CSV or XLSX.
+        Creates the 'Database Query and Export' QGroupBox (settings part only).
+        The QTableView for data preview is handled separately in init_ui.
         """
         group = QGroupBox("数据库查询与导出") # Group box title in Chinese as per UI
         
-        # Main layout for this groupbox (vertical)
-        query_export_main_layout = QVBoxLayout()
-        query_export_main_layout.setSpacing(10) # Spacing between child layouts/widgets
+        # Main layout for this groupbox (vertical) - for settings only now
+        query_export_settings_layout = QVBoxLayout()
+        query_export_settings_layout.setSpacing(10) # Spacing between child layouts/widgets
 
         # --- Database Connection Info ---
         # Layout for database connection parameters
@@ -377,7 +446,7 @@ class ExcelToMySQLApp(QMainWindow):
         db_info_layout.addWidget(QLabel("表名:"), 2, 0)
         db_info_layout.addWidget(self.query_table_name_edit, 2, 1, 1, 3) # Table name input spans 3 columns
 
-        query_export_main_layout.addLayout(db_info_layout) # Add DB info grid to the main vertical layout
+        query_export_settings_layout.addLayout(db_info_layout) # Add DB info grid to the settings layout
 
         # --- Date Selection & Query Button ---
         # Layout for date range selection and the query button
@@ -399,14 +468,13 @@ class ExcelToMySQLApp(QMainWindow):
         self.btn_query_data = QPushButton("查询数据") 
         self.btn_query_data.clicked.connect(self.query_data_from_db) # Connect button to query method
         date_query_layout.addWidget(self.btn_query_data)
-        query_export_main_layout.addLayout(date_query_layout) # Add date/query layout to main
+        query_export_settings_layout.addLayout(date_query_layout) # Add date/query layout to settings
 
-        # --- Data Display Table ---
-        # TableView to display query results
-        self.query_data_preview_table = QTableView() 
-        query_export_main_layout.addWidget(self.query_data_preview_table)
-        # Allow table to expand vertically
-        query_export_main_layout.setStretchFactor(self.query_data_preview_table, 1) 
+        # --- Data Display Table (creation only, not added to this group's layout) ---
+        if not hasattr(self, 'query_data_preview_table') or self.query_data_preview_table is None:
+            self.query_data_preview_table = QTableView() 
+            # Basic properties like setAlternatingRowColors could be set here if desired,
+            # but it's primarily for display in the right panel.
 
         # --- Export Section ---
         # Layout for export path selection
@@ -421,7 +489,7 @@ class ExcelToMySQLApp(QMainWindow):
         self.btn_browse_export_path = QPushButton("浏览...") 
         self.btn_browse_export_path.clicked.connect(self.select_export_file_path) # Connect to path selection dialog
         export_controls_layout.addWidget(self.btn_browse_export_path)
-        query_export_main_layout.addLayout(export_controls_layout)
+        query_export_settings_layout.addLayout(export_controls_layout)
 
         # Layout for export format selection and download button
         export_options_layout = QHBoxLayout()
@@ -437,9 +505,9 @@ class ExcelToMySQLApp(QMainWindow):
         self.btn_download_data.setEnabled(False) # Initially disabled, enabled after successful query
         self.btn_download_data.clicked.connect(self.download_queried_data) # Connect to download method
         export_options_layout.addWidget(self.btn_download_data)
-        query_export_main_layout.addLayout(export_options_layout)
+        query_export_settings_layout.addLayout(export_options_layout)
         
-        group.setLayout(query_export_main_layout) # Set the main vertical layout for the group box
+        group.setLayout(query_export_settings_layout) # Set the settings layout for the group box
         return group
 
     def select_export_file_path(self):
@@ -583,7 +651,7 @@ class ExcelToMySQLApp(QMainWindow):
                 'user': user,
                 'password': password,
                 'database': db_name,
-                'charset': 'utf8mb4', # Use utf8mb4 for broader character set support
+                'charset': 'utf8', # Changed from utf8mb4 to utf8 for compatibility
                 'cursorclass': pymysql.cursors.DictCursor # Fetch results as dictionaries (optional, good for pandas)
             }
             conn = pymysql.connect(**conn_config)
