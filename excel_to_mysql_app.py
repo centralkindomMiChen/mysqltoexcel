@@ -264,8 +264,12 @@ class ExcelToMySQLApp(QMainWindow):
         right_panel_vbox.addWidget(console_group_box, 1) # Console gets less stretch factor
 
         # Add left and right panels to the main horizontal layout
-        app_main_hbox.addWidget(left_panel_widget, 1)  # Left panel stretch factor
-        app_main_hbox.addWidget(right_panel_widget, 2) # Right panel stretch factor (wider)
+        # Change stretch factors to 2 for left_panel_widget and 3 for right_panel_widget
+        app_main_hbox.addWidget(left_panel_widget) # Add widget first
+        app_main_hbox.setStretchFactor(left_panel_widget, 2) # Then set stretch factor
+        app_main_hbox.addWidget(right_panel_widget) # Add widget first
+        app_main_hbox.setStretchFactor(right_panel_widget, 3) # Then set stretch factor
+
 
         # Add the two-column layout (app_main_hbox) to the main vertical layout of the central widget
         self.main_layout.addLayout(app_main_hbox)
@@ -289,72 +293,72 @@ class ExcelToMySQLApp(QMainWindow):
         """
         group_box = QGroupBox("数据库查询与导出 (Database Query & Export)")
         layout = QGridLayout() # Using QGridLayout for a structured label-field layout
+        # Configure column stretch: column 1 and 3 (widgets) can expand more than 0 and 2 (labels)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
 
-        # Row 0: DB Host input
+        # Row 0: DB Host and DB Name
         layout.addWidget(QLabel("主机 (Host):"), 0, 0)
-        self.query_db_host_edit = QLineEdit("localhost") # Default to localhost
-        layout.addWidget(self.query_db_host_edit, 0, 1, 1, 2) # Spans 1 row, 2 columns
+        self.query_db_host_edit = QLineEdit("localhost")
+        layout.addWidget(self.query_db_host_edit, 0, 1)
 
-        # Row 1: DB User input
+        layout.addWidget(QLabel("数据库 (Database):"), 0, 2)
+        self.query_db_name_edit = QLineEdit("michentestdb2")
+        layout.addWidget(self.query_db_name_edit, 0, 3)
+
+        # Row 1: DB User and Table Name
         layout.addWidget(QLabel("用户 (User):"), 1, 0)
-        self.query_db_user_edit = QLineEdit("root") # Default to root
-        layout.addWidget(self.query_db_user_edit, 1, 1, 1, 2)
+        self.query_db_user_edit = QLineEdit("root")
+        layout.addWidget(self.query_db_user_edit, 1, 1)
 
-        # Row 2: DB Password input
+        layout.addWidget(QLabel("表名 (Table):"), 1, 2)
+        self.query_table_name_edit = QLineEdit("report_data")
+        layout.addWidget(self.query_table_name_edit, 1, 3)
+        
+        # Row 2: DB Password and Start Date
         layout.addWidget(QLabel("密码 (Password):"), 2, 0)
         self.query_db_password_edit = QLineEdit()
-        self.query_db_password_edit.setEchoMode(QLineEdit.Password) # Mask password input
-        layout.addWidget(self.query_db_password_edit, 2, 1, 1, 2)
+        self.query_db_password_edit.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.query_db_password_edit, 2, 1)
 
-        # Row 3: Database Name input
-        layout.addWidget(QLabel("数据库 (Database):"), 3, 0)
-        self.query_db_name_edit = QLineEdit("michentestdb2") # Default DB name
-        layout.addWidget(self.query_db_name_edit, 3, 1, 1, 2)
-        
-        # Row 4: Table Name input
-        layout.addWidget(QLabel("表名 (Table):"), 4, 0)
-        self.query_table_name_edit = QLineEdit("report_data") # Default table name
-        layout.addWidget(self.query_table_name_edit, 4, 1, 1, 2)
+        layout.addWidget(QLabel("开始日期 (Start Date):"), 2, 2)
+        self.query_start_date_edit = QDateEdit(QDate.currentDate())
+        self.query_start_date_edit.setCalendarPopup(True)
+        self.query_start_date_edit.setDisplayFormat("yyyy-MM-dd")
+        layout.addWidget(self.query_start_date_edit, 2, 3)
 
-        # Row 5: Start Date input
-        layout.addWidget(QLabel("开始日期 (Start Date):"), 5, 0)
-        self.query_start_date_edit = QDateEdit(QDate.currentDate()) # Default to today
-        self.query_start_date_edit.setCalendarPopup(True) # Use a pop-up calendar
-        self.query_start_date_edit.setDisplayFormat("yyyy-MM-dd") # Standard date format
-        layout.addWidget(self.query_start_date_edit, 5, 1, 1, 2)
-
-        # Row 6: End Date input
-        layout.addWidget(QLabel("结束日期 (End Date):"), 6, 0)
-        self.query_end_date_edit = QDateEdit(QDate.currentDate()) # Default to today
+        # Row 3: (empty) and End Date
+        layout.addWidget(QLabel("结束日期 (End Date):"), 3, 2)
+        self.query_end_date_edit = QDateEdit(QDate.currentDate())
         self.query_end_date_edit.setCalendarPopup(True)
         self.query_end_date_edit.setDisplayFormat("yyyy-MM-dd")
-        layout.addWidget(self.query_end_date_edit, 6, 1, 1, 2)
-
-        # Row 7: Query Button
+        layout.addWidget(self.query_end_date_edit, 3, 3)
+        
+        # Row 4: Query Button (spans all 4 columns)
         self.btn_query_data = QPushButton("查询数据 (Query Data)")
         self.btn_query_data.clicked.connect(self.query_data_from_db)
-        layout.addWidget(self.btn_query_data, 7, 0, 1, 3) # Span all 3 columns for emphasis
+        layout.addWidget(self.btn_query_data, 4, 0, 1, 4) 
 
-        # Row 8: Export File Path input and Browse button
-        layout.addWidget(QLabel("导出路径 (Export Path):"), 8, 0)
+        # Row 5: Export File Path (spans 3 columns) and Browse button
+        layout.addWidget(QLabel("导出路径 (Export Path):"), 5, 0)
         self.query_export_path_edit = QLineEdit()
         self.query_export_path_edit.setPlaceholderText("选择或输入导出文件路径... (Select or input export file path...)")
-        layout.addWidget(self.query_export_path_edit, 8, 1, 1, 1) # Path edit takes 1 column
+        layout.addWidget(self.query_export_path_edit, 5, 1, 1, 2) # Spans columns 1 and 2
         self.btn_browse_export_path = QPushButton("浏览... (Browse...)")
         self.btn_browse_export_path.clicked.connect(self.select_export_file_path)
-        layout.addWidget(self.btn_browse_export_path, 8, 2, 1, 1) # Browse button takes 1 column
+        layout.addWidget(self.btn_browse_export_path, 5, 3) # Column 3
 
-        # Row 9: Export Format selection
-        layout.addWidget(QLabel("导出格式 (Export Format):"), 9, 0)
+        # Row 6: Export Format (spans 3 columns for the ComboBox)
+        layout.addWidget(QLabel("导出格式 (Export Format):"), 6, 0)
         self.query_export_format_combo = QComboBox()
-        self.query_export_format_combo.addItems(["CSV", "XLSX"]) # Supported formats
-        layout.addWidget(self.query_export_format_combo, 9, 1, 1, 2)
+        self.query_export_format_combo.addItems(["CSV", "XLSX"])
+        layout.addWidget(self.query_export_format_combo, 6, 1, 1, 3)
 
-        # Row 10: Download Button
+        # Row 7: Download Button (spans all 4 columns)
         self.btn_download_data = QPushButton("下载数据 (Download Data)")
         self.btn_download_data.clicked.connect(self.download_queried_data)
-        self.btn_download_data.setEnabled(False) # Initially disabled until data is queried
-        layout.addWidget(self.btn_download_data, 10, 0, 1, 3) # Span all 3 columns
+        self.btn_download_data.setEnabled(False) 
+        layout.addWidget(self.btn_download_data, 7, 0, 1, 4)
         
         group_box.setLayout(layout)
         return group_box
@@ -395,32 +399,25 @@ class ExcelToMySQLApp(QMainWindow):
         primarily used for the Excel import functionality.
         """
         group_box = QGroupBox("数据库信息 (Database Information - For Import)")
-        layout = QVBoxLayout()
+        # Using QGridLayout for a more compact label-field layout
+        layout = QGridLayout()
+        layout.setColumnStretch(1, 1) # Allow the QLineEdit column to expand
 
         # Database Name input
-        db_name_layout = QHBoxLayout()
-        db_name_label = QLabel("数据库名称 (DB Name):")
+        layout.addWidget(QLabel("数据库名称 (DB Name):"), 0, 0)
         self.db_name_edit = QLineEdit("michentestdb2") # Default DB name for import
-        db_name_layout.addWidget(db_name_label)
-        db_name_layout.addWidget(self.db_name_edit)
-        layout.addLayout(db_name_layout)
+        layout.addWidget(self.db_name_edit, 0, 1)
 
         # Database User input
-        db_user_layout = QHBoxLayout()
-        db_user_label = QLabel("用户名 (User):")
+        layout.addWidget(QLabel("用户名 (User):"), 1, 0)
         self.db_user_edit = QLineEdit("root") # Default user for import
-        db_user_layout.addWidget(db_user_label)
-        db_user_layout.addWidget(self.db_user_edit)
-        layout.addLayout(db_user_layout)
+        layout.addWidget(self.db_user_edit, 1, 1)
 
         # Database Password input
-        db_password_layout = QHBoxLayout()
-        db_password_label = QLabel("密码 (Password):")
+        layout.addWidget(QLabel("密码 (Password):"), 2, 0)
         self.db_password_edit = QLineEdit("123") # Default password for import
         self.db_password_edit.setEchoMode(QLineEdit.Password) # Mask password
-        db_password_layout.addWidget(db_password_label)
-        db_password_layout.addWidget(self.db_password_edit)
-        layout.addLayout(db_password_layout)
+        layout.addWidget(self.db_password_edit, 2, 1)
         
         group_box.setLayout(layout)
         return group_box
@@ -430,35 +427,29 @@ class ExcelToMySQLApp(QMainWindow):
         Creates the QGroupBox for "表信息" (Table Information).
         This group displays information related to the import process, such as
         the target table name, number of rows imported, and current operation status.
+        Uses QGridLayout for better alignment and compactness.
         """
         group_box = QGroupBox("表信息 (Table Information - For Import)")
-        layout = QVBoxLayout()
+        # Using QGridLayout for a more compact label-field layout
+        layout = QGridLayout()
+        layout.setColumnStretch(1, 1) # Allow the QLineEdit column to expand
 
         # Target Table Name input (for import)
-        table_name_layout = QHBoxLayout()
-        table_name_label = QLabel("表名称 (Table Name):")
+        layout.addWidget(QLabel("表名称 (Table Name):"), 0, 0)
         self.table_name_edit = QLineEdit("report_data") # Default table name for import
-        table_name_layout.addWidget(table_name_label)
-        table_name_layout.addWidget(self.table_name_edit)
-        layout.addLayout(table_name_layout)
+        layout.addWidget(self.table_name_edit, 0, 1)
 
         # Display for Number of Rows Imported (read-only)
-        rows_imported_layout = QHBoxLayout()
-        rows_imported_label = QLabel("导入行数 (Rows Imported):")
+        layout.addWidget(QLabel("导入行数 (Rows Imported):"), 1, 0)
         self.rows_imported_edit = QLineEdit("0") 
         self.rows_imported_edit.setReadOnly(True)
-        rows_imported_layout.addWidget(rows_imported_label)
-        rows_imported_layout.addWidget(self.rows_imported_edit)
-        layout.addLayout(rows_imported_layout)
+        layout.addWidget(self.rows_imported_edit, 1, 1)
         
         # Display for Current Operation Status (read-only)
-        operation_status_layout = QHBoxLayout()
-        operation_status_label = QLabel("状态 (Status):")
+        layout.addWidget(QLabel("状态 (Status):"), 2, 0)
         self.operation_status_edit = QLineEdit("等待操作 (Waiting for operation)") 
         self.operation_status_edit.setReadOnly(True)
-        operation_status_layout.addWidget(operation_status_label)
-        operation_status_layout.addWidget(self.operation_status_edit)
-        layout.addLayout(operation_status_layout)
+        layout.addWidget(self.operation_status_edit, 2, 1)
 
         group_box.setLayout(layout)
         return group_box
